@@ -1,0 +1,62 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="MiRemoteControl.Desktop.PluginManagerWindow"
+        Title="插件管理" Icon="/Assets/head_portrait.ico"
+        Width="720" Height="560" MinWidth="660" MinHeight="460"
+        WindowStartupLocation="CenterOwner" WindowDecorations="None"
+        ExtendClientAreaToDecorationsHint="True" TransparencyLevelHint="Transparent"
+        Background="Transparent">
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="Plugin.Background" Color="#F7F9FA"/><SolidColorBrush x:Key="Plugin.Surface" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="Plugin.Border" Color="#D7E0E5"/><SolidColorBrush x:Key="Plugin.Text" Color="#17222A"/>
+          <SolidColorBrush x:Key="Plugin.Muted" Color="#60717C"/><SolidColorBrush x:Key="Plugin.Accent" Color="#16856B"/>
+          <SolidColorBrush x:Key="Plugin.AccentSoft" Color="#E9F8F3"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="Plugin.Background" Color="#0B0D10"/><SolidColorBrush x:Key="Plugin.Surface" Color="#15191E"/>
+          <SolidColorBrush x:Key="Plugin.Border" Color="#2B343C"/><SolidColorBrush x:Key="Plugin.Text" Color="#F5F7FA"/>
+          <SolidColorBrush x:Key="Plugin.Muted" Color="#98A5AF"/><SolidColorBrush x:Key="Plugin.Accent" Color="#76E2BE"/>
+          <SolidColorBrush x:Key="Plugin.AccentSoft" Color="#142720"/>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Window.Resources>
+  <Window.Styles>
+    <Style Selector="Button.action"><Setter Property="Padding" Value="13,7"/><Setter Property="CornerRadius" Value="7"/><Setter Property="FontSize" Value="12.5"/></Style>
+    <Style Selector="Button.close"><Setter Property="Width" Value="42"/><Setter Property="Height" Value="38"/><Setter Property="Padding" Value="0"/><Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/><Setter Property="CornerRadius" Value="7"/><Setter Property="Foreground" Value="{DynamicResource Plugin.Muted}"/></Style>
+    <Style Selector="Button.close:pointerover"><Setter Property="Background" Value="#D6424E"/><Setter Property="Foreground" Value="White"/></Style>
+  </Window.Styles>
+  <Border Background="{DynamicResource Plugin.Background}" BorderBrush="{DynamicResource Plugin.Border}" BorderThickness="1" CornerRadius="9">
+    <Grid RowDefinitions="48,*">
+      <Border Background="{DynamicResource Plugin.Surface}" BorderBrush="{DynamicResource Plugin.Border}" BorderThickness="0,0,0,1" CornerRadius="9,9,0,0" PointerPressed="TitleBarPointerPressed">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+            <Image Source="/Assets/head_portrait.png" Width="27" Height="27"/>
+            <TextBlock Text="插件管理" Margin="10,0,0,0" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Plugin.Text}" VerticalAlignment="Center"/>
+          </StackPanel>
+          <Button Grid.Column="1" Classes="close" Margin="0,0,5,0" Click="CloseWindow">
+            <Path Width="12" Height="12" Data="M1.5,1.5 L10.5,10.5 M10.5,1.5 L1.5,10.5" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.25"/>
+          </Button>
+        </Grid>
+      </Border>
+      <ScrollViewer Grid.Row="1" Padding="24,20" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="18">
+          <StackPanel>
+            <TextBlock Text="本地插件" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource Plugin.Text}"/>
+            <TextBlock Text="已安装插件的版本与位置。更新后重启软件即可加载新版本。" Margin="0,4,0,0" FontSize="12" Foreground="{DynamicResource Plugin.Muted}"/>
+          </StackPanel>
+          <StackPanel Name="LocalPluginsPanel" Spacing="10"/>
+          <Border Height="1" Background="{DynamicResource Plugin.Border}"/>
+          <StackPanel>
+            <TextBlock Text="云端插件" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource Plugin.Text}"/>
+            <TextBlock Text="支持下载安装、版本更新、暂停、断点续传和取消下载。" Margin="0,4,0,0" FontSize="12" Foreground="{DynamicResource Plugin.Muted}"/>
+          </StackPanel>
+          <StackPanel Name="CloudPluginsPanel" Spacing="10"/>
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+  </Border>
+</Window>

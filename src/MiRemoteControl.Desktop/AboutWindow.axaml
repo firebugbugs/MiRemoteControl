@@ -1,0 +1,145 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="MiRemoteControl.Desktop.AboutWindow"
+        Title="关于 Mi Remote Studio" Icon="/Assets/head_portrait.ico"
+        Width="620" Height="310" MinWidth="620" MinHeight="310"
+        WindowStartupLocation="CenterOwner" WindowDecorations="None"
+        ExtendClientAreaToDecorationsHint="True"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent"
+        Foreground="{DynamicResource About.TextPrimary}">
+
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="About.Background" Color="#F7F9FA"/>
+          <SolidColorBrush x:Key="About.Surface" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="About.SurfaceAlt" Color="#F1F5F6"/>
+          <SolidColorBrush x:Key="About.Border" Color="#D7E0E5"/>
+          <SolidColorBrush x:Key="About.TextPrimary" Color="#17222A"/>
+          <SolidColorBrush x:Key="About.TextSecondary" Color="#60717C"/>
+          <SolidColorBrush x:Key="About.Accent" Color="#16856B"/>
+          <SolidColorBrush x:Key="About.LinkSurface" Color="#EDF8F4"/>
+          <SolidColorBrush x:Key="About.GitHubIcon" Color="#181717"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="About.Background" Color="#0B0D10"/>
+          <SolidColorBrush x:Key="About.Surface" Color="#15191E"/>
+          <SolidColorBrush x:Key="About.SurfaceAlt" Color="#101419"/>
+          <SolidColorBrush x:Key="About.Border" Color="#2B343C"/>
+          <SolidColorBrush x:Key="About.TextPrimary" Color="#F5F7FA"/>
+          <SolidColorBrush x:Key="About.TextSecondary" Color="#98A5AF"/>
+          <SolidColorBrush x:Key="About.Accent" Color="#76E2BE"/>
+          <SolidColorBrush x:Key="About.LinkSurface" Color="#142720"/>
+          <SolidColorBrush x:Key="About.GitHubIcon" Color="#F2F4F6"/>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Window.Resources>
+
+  <Window.Styles>
+    <Style Selector="Button.link">
+      <Setter Property="Background" Value="{DynamicResource About.Surface}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource About.Border}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="10"/>
+      <Setter Property="Padding" Value="14,11"/>
+      <Setter Property="Height" Value="66"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.link:pointerover"><Setter Property="Background" Value="{DynamicResource About.LinkSurface}"/><Setter Property="BorderBrush" Value="{DynamicResource About.Accent}"/></Style>
+    <Style Selector="Button.icon-link">
+      <Setter Property="Width" Value="32"/><Setter Property="Height" Value="32"/><Setter Property="Padding" Value="5"/>
+      <Setter Property="Background" Value="{DynamicResource About.SurfaceAlt}"/><Setter Property="BorderBrush" Value="{DynamicResource About.Border}"/>
+      <Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="9"/>
+    </Style>
+    <Style Selector="Button.icon-link:pointerover"><Setter Property="Background" Value="{DynamicResource About.LinkSurface}"/><Setter Property="BorderBrush" Value="{DynamicResource About.Accent}"/></Style>
+    <Style Selector="Button.close">
+      <Setter Property="Width" Value="42"/><Setter Property="Height" Value="38"/><Setter Property="Padding" Value="0"/>
+      <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Foreground" Value="{DynamicResource About.TextSecondary}"/>
+    </Style>
+    <Style Selector="Button.close:pointerover"><Setter Property="Background" Value="#D6424E"/><Setter Property="Foreground" Value="White"/></Style>
+  </Window.Styles>
+
+  <Border Background="{DynamicResource About.Background}" BorderBrush="{DynamicResource About.Border}" BorderThickness="1" CornerRadius="9">
+    <Grid RowDefinitions="48,*">
+      <Border Grid.Row="0" Background="{DynamicResource About.Surface}" BorderBrush="{DynamicResource About.Border}" BorderThickness="0,0,0,1"
+              CornerRadius="9,9,0,0" PointerPressed="TitleBarPointerPressed">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="20,0,0,0">
+            <Border Width="28" Height="28" CornerRadius="9" Background="{DynamicResource About.SurfaceAlt}" BorderBrush="{DynamicResource About.Border}" BorderThickness="1"><Image Source="/Assets/head_portrait.png" Width="23" Height="23"/></Border>
+            <TextBlock Text="关于 Mi Remote Studio" Margin="11,0,0,0" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
+          </StackPanel>
+          <Button Grid.Column="1" Classes="close" Margin="0,0,5,0" Click="CloseAbout" ToolTip.Tip="关闭"><Path Width="12" Height="12" Data="M1.5,1.5 L10.5,10.5 M10.5,1.5 L1.5,10.5" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.25"/></Button>
+        </Grid>
+      </Border>
+
+      <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,20">
+        <StackPanel Spacing="14">
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16">
+            <Border Width="72" Height="72" CornerRadius="22" Background="{DynamicResource About.Surface}" BorderBrush="{DynamicResource About.Border}" BorderThickness="1" BoxShadow="0 7 18 0 #28000000"><Image Source="/Assets/head_portrait.png" Width="60" Height="60"/></Border>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4">
+              <TextBlock Text="Mi Remote Studio" FontSize="24" FontWeight="Bold"/>
+              <TextBlock Text="小米蓝牙遥控器控制台" FontSize="13.5" Foreground="{DynamicResource About.TextSecondary}"/>
+              <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
+                <Button Classes="icon-link" Tag="https://gitee.com/unbengable/mi-remote-control" Click="OpenLink" ToolTip.Tip="Gitee 仓库">
+                  <Viewbox><Path Fill="#C71D23" Data="M11.984,0 A12,12,0,1,0,12,24 A12,12,0,0,0,11.984,0 Z M18.074,5.333 C18.402,5.333,18.668,5.599,18.667,5.926 L18.667,7.408 A.594,.594,0,0,1,18.074,8 H9.777 C8.795,8,7.999,8.796,7.999,9.778 V15.408 C7.999,15.735,8.265,16,8.592,16 H14.222 C15.204,16,16,15.204,16,14.222 V13.926 A.593,.593,0,0,0,15.408,13.333 H11.258 A.592,.592,0,0,1,10.666,12.741 V11.259 A.593,.593,0,0,1,11.259,10.667 H18.074 C18.401,10.667,18.667,10.932,18.667,11.259 V14.667 A4,4,0,0,1,14.667,18.667 H5.926 A.593,.593,0,0,1,5.333,18.074 V9.778 A4.444,4.444,0,0,1,9.778,5.333 Z"/></Viewbox>
+                </Button>
+                <Button Classes="icon-link" Tag="https://github.com/firebugbugs/MiRemoteControl" Click="OpenLink" ToolTip.Tip="GitHub 仓库">
+                  <Viewbox><Path Fill="{DynamicResource About.GitHubIcon}" Data="M12,.297 C5.37,.297,0,5.67,0,12.297 C0,17.6,3.438,22.097,8.205,23.682 C8.805,23.795,9.025,23.424,9.025,23.105 C9.025,22.82,9.015,22.065,9,21.065 C5.662,21.789,4.958,19.455,4.958,19.455 C4.422,18.07,3.633,17.7,3.633,17.7 C2.546,16.956,3.717,16.971,3.717,16.971 C4.922,17.055,5.555,18.207,5.555,18.207 C6.625,20.042,8.364,19.512,9.05,19.205 C9.158,18.429,9.467,17.9,9.81,17.6 C7.145,17.3,4.344,16.268,4.344,11.67 C4.344,10.36,4.809,9.29,5.579,8.45 C5.444,8.147,5.039,6.927,5.684,5.274 C5.684,5.274,6.689,4.952,8.984,6.504 C9.944,6.237,10.964,6.105,11.984,6.099 C13.004,6.105,14.024,6.237,14.984,6.504 C17.264,4.952,18.269,5.274,18.269,5.274 C18.914,6.927,18.509,8.147,18.389,8.45 C19.154,9.29,19.619,10.36,19.619,11.67 C19.619,16.28,16.814,17.295,14.144,17.59 C14.564,17.95,14.954,18.686,14.954,19.81 C14.954,21.416,14.939,22.706,14.939,23.096 C14.939,23.411,15.149,23.786,15.764,23.666 C20.565,22.092,24,17.592,24,12.297 C24,5.67,18.63,.297,12,.297 Z"/></Viewbox>
+                </Button>
+                <Button Classes="icon-link" Tag="https://cheems.cn" Click="OpenLink" ToolTip.Tip="作者主页">
+                  <Image Source="/Assets/head_portrait.png" Width="22" Height="22"/>
+                </Button>
+                <Button Classes="icon-link" Tag="https://space.bilibili.com/43096314" Click="OpenLink" ToolTip.Tip="Bilibili 主页">
+                  <TextBlock Text="哔" FontSize="16" FontWeight="Bold" Foreground="#00AEEC" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Button>
+              </StackPanel>
+            </StackPanel>
+          </Grid>
+
+          <Border Background="{DynamicResource About.Surface}" BorderBrush="{DynamicResource About.Border}" BorderThickness="1" CornerRadius="12" Padding="14">
+            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto" RowSpacing="9">
+              <TextBlock Text="项目信息" FontSize="13.5" FontWeight="SemiBold" Grid.ColumnSpan="2"/>
+              <TextBlock Text="版本号" Grid.Row="1" Foreground="{DynamicResource About.TextSecondary}" FontSize="12.5"/>
+              <TextBlock Text="v1.0.0" Grid.Row="1" Grid.Column="1" FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+              <TextBlock Text="作者" Grid.Row="2" Foreground="{DynamicResource About.TextSecondary}" FontSize="12.5"/>
+              <TextBlock Text="Cheems" Grid.Row="2" Grid.Column="1" FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+            </Grid>
+          </Border>
+
+          <Grid IsVisible="False" ColumnDefinitions="*,*" ColumnSpacing="12" RowDefinitions="Auto,Auto" RowSpacing="12">
+            <Button Classes="link" Tag="https://gitee.com/unbengable/mi-remote-control" Click="OpenLink">
+              <Grid ColumnDefinitions="36,*" ColumnSpacing="11">
+                <Viewbox Width="32" Height="32" HorizontalAlignment="Left" VerticalAlignment="Center"><Path Fill="#C71D23" Data="M11.984,0 A12,12,0,1,0,12,24 A12,12,0,0,0,11.984,0 Z M18.074,5.333 C18.402,5.333,18.668,5.599,18.667,5.926 L18.667,7.408 A.594,.594,0,0,1,18.074,8 H9.777 C8.795,8,7.999,8.796,7.999,9.778 V15.408 C7.999,15.735,8.265,16,8.592,16 H14.222 C15.204,16,16,15.204,16,14.222 V13.926 A.593,.593,0,0,0,15.408,13.333 H11.258 A.592,.592,0,0,1,10.666,12.741 V11.259 A.593,.593,0,0,1,11.259,10.667 H18.074 C18.401,10.667,18.667,10.932,18.667,11.259 V14.667 A4,4,0,0,1,14.667,18.667 H5.926 A.593,.593,0,0,1,5.333,18.074 V9.778 A4.444,4.444,0,0,1,9.778,5.333 Z"/></Viewbox>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="Gitee 仓库" FontSize="12.5" FontWeight="SemiBold"/><TextBlock Text="unbengable/mi-remote-control" FontSize="10.5" Foreground="{DynamicResource About.TextSecondary}" TextTrimming="CharacterEllipsis"/></StackPanel>
+              </Grid>
+            </Button>
+            <Button Grid.Column="1" Classes="link" Tag="https://github.com/firebugbugs/MiRemoteControl" Click="OpenLink">
+              <Grid ColumnDefinitions="36,*" ColumnSpacing="11">
+                <Viewbox Width="32" Height="32" HorizontalAlignment="Left" VerticalAlignment="Center"><Path Fill="{DynamicResource About.GitHubIcon}" Data="M12,.297 C5.37,.297,0,5.67,0,12.297 C0,17.6,3.438,22.097,8.205,23.682 C8.805,23.795,9.025,23.424,9.025,23.105 C9.025,22.82,9.015,22.065,9,21.065 C5.662,21.789,4.958,19.455,4.958,19.455 C4.422,18.07,3.633,17.7,3.633,17.7 C2.546,16.956,3.717,16.971,3.717,16.971 C4.922,17.055,5.555,18.207,5.555,18.207 C6.625,20.042,8.364,19.512,9.05,19.205 C9.158,18.429,9.467,17.9,9.81,17.6 C7.145,17.3,4.344,16.268,4.344,11.67 C4.344,10.36,4.809,9.29,5.579,8.45 C5.444,8.147,5.039,6.927,5.684,5.274 C5.684,5.274,6.689,4.952,8.984,6.504 C9.944,6.237,10.964,6.105,11.984,6.099 C13.004,6.105,14.024,6.237,14.984,6.504 C17.264,4.952,18.269,5.274,18.269,5.274 C18.914,6.927,18.509,8.147,18.389,8.45 C19.154,9.29,19.619,10.36,19.619,11.67 C19.619,16.28,16.814,17.295,14.144,17.59 C14.564,17.95,14.954,18.686,14.954,19.81 C14.954,21.416,14.939,22.706,14.939,23.096 C14.939,23.411,15.149,23.786,15.764,23.666 C20.565,22.092,24,17.592,24,12.297 C24,5.67,18.63,.297,12,.297 Z"/></Viewbox>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="GitHub 仓库" FontSize="12.5" FontWeight="SemiBold"/><TextBlock Text="firebugbugs/MiRemoteControl" FontSize="10.5" Foreground="{DynamicResource About.TextSecondary}" TextTrimming="CharacterEllipsis"/></StackPanel>
+              </Grid>
+            </Button>
+            <Button Grid.Row="1" Classes="link" Tag="https://cheems.cn" Click="OpenLink">
+              <Grid ColumnDefinitions="36,*" ColumnSpacing="11">
+                <Image Source="/Assets/head_portrait.png" Width="30" Height="30" HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="作者主页" FontSize="12.5" FontWeight="SemiBold"/><TextBlock Text="cheems.cn" FontSize="10.5" Foreground="{DynamicResource About.TextSecondary}"/></StackPanel>
+              </Grid>
+            </Button>
+            <Button Grid.Row="1" Grid.Column="1" Classes="link" Tag="https://space.bilibili.com/43096314" Click="OpenLink">
+              <Grid ColumnDefinitions="36,*" ColumnSpacing="11">
+                <Viewbox Width="32" Height="32" HorizontalAlignment="Left" VerticalAlignment="Center"><Path Fill="#00AEEC" Data="M17.813,4.653 H18.667 C20.177,4.707,21.436,5.231,22.44,6.227 C23.444,7.222,23.964,8.476,24,9.987 V17.347 C23.964,18.857,23.444,20.116,22.44,21.12 C21.436,22.124,20.177,22.644,18.667,22.68 H5.333 C3.823,22.644,2.564,22.124,1.56,21.12 C.556,20.116,.036,18.857,0,17.347 V9.987 C.036,8.476,.556,7.222,1.56,6.227 C2.564,5.231,3.823,4.707,5.333,4.653 H6.107 L4.933,3.533 C4.684,3.284,4.56,2.982,4.56,2.627 C4.56,2.271,4.684,1.969,4.933,1.72 C5.2,1.471,5.506,1.347,5.853,1.347 C6.2,1.347,6.506,1.471,6.773,1.72 L9.653,4.44 C9.724,4.511,9.787,4.582,9.84,4.653 H14.107 C14.16,4.582,14.223,4.511,14.293,4.44 L17.147,1.693 C17.414,1.444,17.729,1.471,17.996,1.72 C18.263,1.969,18.387,2.271,18.387,2.627 C18.387,2.982,18.263,3.284,18.013,3.533 Z M5.333,7.24 C4.587,7.258,3.96,7.516,3.453,8.013 C2.947,8.511,2.684,9.143,2.667,9.907 V17.427 C2.684,18.191,2.947,18.822,3.453,19.32 C3.96,19.818,4.587,20.076,5.333,20.093 H18.667 C19.413,20.076,20.04,19.818,20.547,19.32 C21.053,18.822,21.316,18.191,21.333,17.427 V9.907 C21.316,9.143,21.053,8.511,20.547,8.013 C20.04,7.516,19.413,7.258,18.667,7.24 Z M8,11.107 C8.373,11.107,8.684,11.231,8.933,11.48 C9.183,11.729,9.316,12.049,9.333,12.44 V13.613 C9.316,14.004,9.183,14.324,8.933,14.573 C8.684,14.823,8.373,14.947,8,14.947 C7.627,14.947,7.316,14.823,7.067,14.573 C6.817,14.324,6.684,14.004,6.667,13.613 V12.44 C6.667,12.067,6.796,11.751,7.053,11.493 C7.311,11.236,7.627,11.107,8,11.107 Z M16,11.107 C16.373,11.107,16.684,11.231,16.933,11.48 C17.183,11.729,17.316,12.049,17.333,12.44 V13.613 C17.316,14.004,17.183,14.324,16.933,14.573 C16.684,14.823,16.373,14.947,16,14.947 C15.627,14.947,15.316,14.823,15.067,14.573 C14.817,14.324,14.684,14.004,14.667,13.613 V12.44 C14.684,12.067,14.813,11.751,15.067,11.493 C15.324,11.236,15.627,11.107,16,11.107 Z"/></Viewbox>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="Bilibili 主页" FontSize="12.5" FontWeight="SemiBold"/><TextBlock Text="space.bilibili.com/43096314" FontSize="10.5" Foreground="{DynamicResource About.TextSecondary}" TextTrimming="CharacterEllipsis"/></StackPanel>
+              </Grid>
+            </Button>
+          </Grid>
+
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+  </Border>
+</Window>

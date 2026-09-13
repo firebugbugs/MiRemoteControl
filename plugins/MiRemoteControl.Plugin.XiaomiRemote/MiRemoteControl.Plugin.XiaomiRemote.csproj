@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/MiRemoteControl.Contracts/MiRemoteControl.Contracts.csproj" />
+    <None Update="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="System.Speech" Version="10.0.0" />
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="1.13.5" />
+    <PackageDownload Include="org.k2fsa.sherpa.onnx" Version="[1.13.5]" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="sherpa-onnx">
+      <HintPath>$(NuGetPackageRoot)org.k2fsa.sherpa.onnx\1.13.5\lib\net10.0\sherpa-onnx.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

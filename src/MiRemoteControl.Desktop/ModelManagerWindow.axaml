@@ -1,0 +1,51 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="MiRemoteControl.Desktop.ModelManagerWindow"
+        Title="语音模型管理" Icon="/Assets/head_portrait.ico"
+        Width="720" Height="600" MinWidth="660" MinHeight="480"
+        WindowStartupLocation="CenterOwner" WindowDecorations="None"
+        ExtendClientAreaToDecorationsHint="True" TransparencyLevelHint="Transparent"
+        Background="Transparent">
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="Model.Background" Color="#F7F9FA"/><SolidColorBrush x:Key="Model.Surface" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="Model.SurfaceAlt" Color="#F1F5F6"/><SolidColorBrush x:Key="Model.Border" Color="#D7E0E5"/>
+          <SolidColorBrush x:Key="Model.Text" Color="#17222A"/><SolidColorBrush x:Key="Model.Muted" Color="#60717C"/>
+          <SolidColorBrush x:Key="Model.Accent" Color="#16856B"/><SolidColorBrush x:Key="Model.AccentSoft" Color="#E9F8F3"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="Model.Background" Color="#0B0D10"/><SolidColorBrush x:Key="Model.Surface" Color="#15191E"/>
+          <SolidColorBrush x:Key="Model.SurfaceAlt" Color="#101419"/><SolidColorBrush x:Key="Model.Border" Color="#2B343C"/>
+          <SolidColorBrush x:Key="Model.Text" Color="#F5F7FA"/><SolidColorBrush x:Key="Model.Muted" Color="#98A5AF"/>
+          <SolidColorBrush x:Key="Model.Accent" Color="#76E2BE"/><SolidColorBrush x:Key="Model.AccentSoft" Color="#142720"/>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Window.Resources>
+  <Window.Styles>
+    <Style Selector="Button.action"><Setter Property="Padding" Value="13,7"/><Setter Property="CornerRadius" Value="7"/><Setter Property="FontSize" Value="12.5"/></Style>
+    <Style Selector="Button.close"><Setter Property="Width" Value="42"/><Setter Property="Height" Value="38"/><Setter Property="Padding" Value="0"/><Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/><Setter Property="CornerRadius" Value="7"/><Setter Property="Foreground" Value="{DynamicResource Model.Muted}"/></Style>
+    <Style Selector="Button.close:pointerover"><Setter Property="Background" Value="#D6424E"/><Setter Property="Foreground" Value="White"/></Style>
+  </Window.Styles>
+  <Border Background="{DynamicResource Model.Background}" BorderBrush="{DynamicResource Model.Border}" BorderThickness="1" CornerRadius="9">
+    <Grid RowDefinitions="48,*">
+      <Border Background="{DynamicResource Model.Surface}" BorderBrush="{DynamicResource Model.Border}" BorderThickness="0,0,0,1" CornerRadius="9,9,0,0" PointerPressed="TitleBarPointerPressed">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0"><Image Source="/Assets/head_portrait.png" Width="27" Height="27"/><TextBlock Text="语音模型管理" Margin="10,0,0,0" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Model.Text}" VerticalAlignment="Center"/></StackPanel>
+          <Button Grid.Column="1" Classes="close" Margin="0,0,5,0" Click="CloseWindow"><Path Width="12" Height="12" Data="M1.5,1.5 L10.5,10.5 M10.5,1.5 L1.5,10.5" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.25"/></Button>
+        </Grid>
+      </Border>
+      <ScrollViewer Grid.Row="1" Padding="24,20" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="18">
+          <StackPanel><TextBlock Text="本地模型" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource Model.Text}"/><TextBlock Text="已安装的模型会自动出现在主界面模型下拉框中。" Margin="0,4,0,0" FontSize="12" Foreground="{DynamicResource Model.Muted}"/></StackPanel>
+          <StackPanel Name="LocalModelsPanel" Spacing="10"/>
+          <Border Height="1" Background="{DynamicResource Model.Border}"/>
+          <StackPanel><TextBlock Text="云端模型" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource Model.Text}"/><TextBlock Text="模型来自 Hugging Face，支持暂停、断点续传和取消下载。" Margin="0,4,0,0" FontSize="12" Foreground="{DynamicResource Model.Muted}"/></StackPanel>
+          <StackPanel Name="CloudModelsPanel" Spacing="10"/>
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+  </Border>
+</Window>

@@ -1,0 +1,214 @@
+using System.IO.Compression;
+using System.Reflection;
+using System.Runtime.Loader;
+using System.Security.Cryptography;
+using System.Text.Json;
+using MiRemoteControl.Contracts;
+
+namespace MiRemoteControl.Core;
+
+public sealed class PluginCatalog : IDisposable
+{
+    private const int MaxBundleEntries = 2048;
+    private const long MaxBundleBytes = 256L * 1024 * 1024;
+    private readonly Dictionary<string, IHarnessPlugin> _plugins = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _sourcePaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<AssemblyLoadContext> _contexts = [];
+    private readonly string _cacheDirectory;
+
+    public List<string> Errors { get; } = [];
+    public IReadOnlyList<PluginDescriptor> Descriptors => _plugins.Values.Select(p => p.Descriptor).ToArray();
+    public IReadOnlyDictionary<string, string> SourcePaths => _sourcePaths;
+
+    public PluginCatalog(string directory, string? cacheDirectory = null)
+    {
+        _cacheDirectory = cacheDirectory ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MiRemoteControl", "plugin-cache");
+        if (!Directory.Exists(directory)) return;
+
+        LoadDirectory(Path.Combine(directory, PluginFolders.Remotes), PluginKinds.Remote);
+        LoadDirectory(Path.Combine(directory, PluginFolders.Targets), PluginKinds.Target);
+    }
+
+    private void LoadDirectory(string directory, string expectedKind)
+    {
+        if (!Directory.Exists(directory)) return;
+
+        // A single-file package is a ZIP container with plugin.json at its root.
+        // Its filename and extension are intentionally irrelevant.
+        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly))
+        {
+            if (!LooksLikeZip(file)) continue;
+            TryLoad(() => LoadBundle(file, expectedKind), file);
+        }
+    }
+
+    private void TryLoad(Action load, string source)
+    {
+        try { load(); }
+        catch (Exception e) { Errors.Add($"{Path.GetFileName(source)}: {e.GetBaseException().Message}"); }
+    }
+
+    private void LoadBundle(string bundlePath, string expectedKind)
+    {
+        using var archive = ZipFile.OpenRead(bundlePath);
+        if (archive.Entries.Count is 0 or > MaxBundleEntries)
+            throw new InvalidDataException($"插件包条目数必须在 1 到 {MaxBundleEntries} 之间。");
+        var manifestEntries = archive.Entries.Where(entry =>
+            string.Equals(entry.FullName.Replace('\\', '/'), "plugin.json", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (manifestEntries.Length != 1) throw new InvalidDataException("插件包根目录必须包含且只能包含一个 plugin.json。");
+        if (archive.Entries.Sum(entry => entry.Length) > MaxBundleBytes)
+            throw new InvalidDataException("插件包解压后不能超过 256 MB。");
+
+        string manifestJson;
+        using (var reader = new StreamReader(manifestEntries[0].Open())) manifestJson = reader.ReadToEnd();
+        using var bundleStream = new FileStream(bundlePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var hash = Convert.ToHexString(SHA256.HashData(bundleStream)).ToLowerInvariant();
+        var extractedRoot = Path.Combine(_cacheDirectory, hash);
+        if (!File.Exists(Path.Combine(extractedRoot, "plugin.json"))) ExtractBundle(archive, extractedRoot);
+        LoadPlugin(manifestJson, extractedRoot, Path.GetFullPath(bundlePath), expectedKind);
+    }
+
+    private void ExtractBundle(ZipArchive archive, string destination)
+    {
+        Directory.CreateDirectory(_cacheDirectory);
+        var staging = Path.Combine(_cacheDirectory, ".extracting-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staging);
+        var stagingPrefix = Path.GetFullPath(staging) + Path.DirectorySeparatorChar;
+        try
+        {
+            foreach (var entry in archive.Entries)
+            {
+                var relativePath = entry.FullName.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+                var target = Path.GetFullPath(Path.Combine(staging, relativePath));
+                if (!target.StartsWith(stagingPrefix, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("插件包包含越过根目录的路径。");
+                if (string.IsNullOrEmpty(entry.Name)) { Directory.CreateDirectory(target); continue; }
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                using var input = entry.Open();
+                using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                input.CopyTo(output);
+            }
+            if (Directory.Exists(destination)) Directory.Delete(staging, true);
+            else Directory.Move(staging, destination);
+        }
+        catch
+        {
+            if (Directory.Exists(staging)) Directory.Delete(staging, true);
+            throw;
+        }
+    }
+
+    private void LoadPlugin(string manifestJson, string root, string sourcePath, string expectedKind)
+    {
+        var manifest = JsonSerializer.Deserialize<Manifest>(manifestJson, Wire.Json)
+            ?? throw new InvalidDataException("Empty manifest.");
+        if (manifest.ApiVersion != 1) throw new InvalidDataException("Unsupported plugin API version.");
+        var entry = Path.GetFullPath(Path.Combine(root, manifest.EntryAssembly));
+        if (!entry.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Entry must be inside the plugin package.");
+        if (!File.Exists(entry)) throw new FileNotFoundException("插件入口程序集不存在。", entry);
+        if (_plugins.ContainsKey(manifest.Id)) throw new InvalidDataException("Duplicate plugin ID.");
+        var context = new PluginLoadContext(entry);
+        _contexts.Add(context);
+        var assembly = context.LoadFromAssemblyPath(entry);
+        var type = assembly.GetType(manifest.EntryType, true)!;
+        var plugin = Activator.CreateInstance(type) as IHarnessPlugin
+            ?? throw new InvalidDataException("Entry does not implement IHarnessPlugin.");
+        if (plugin.Descriptor.Id != manifest.Id) { plugin.Dispose(); throw new InvalidDataException("Plugin ID mismatch."); }
+        if (!string.Equals(plugin.Descriptor.Kind, expectedKind, StringComparison.OrdinalIgnoreCase))
+        {
+            plugin.Dispose();
+            throw new InvalidDataException(
+                $"插件类型为 {plugin.Descriptor.Kind}，应放入 {FolderForKind(plugin.Descriptor.Kind)} 目录。");
+        }
+        _plugins.Add(manifest.Id, plugin);
+        _sourcePaths.Add(manifest.Id, Path.GetFullPath(sourcePath));
+    }
+
+    private static string FolderForKind(string kind) =>
+        string.Equals(kind, PluginKinds.Remote, StringComparison.OrdinalIgnoreCase)
+            ? PluginFolders.Remotes
+            : PluginFolders.Targets;
+
+    private static bool LooksLikeZip(string path)
+    {
+        try
+        {
+            Span<byte> signature = stackalloc byte[4];
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (stream.Read(signature) != signature.Length || signature[0] != 0x50 || signature[1] != 0x4B) return false;
+            return (signature[2] == 0x03 && signature[3] == 0x04) ||
+                (signature[2] == 0x05 && signature[3] == 0x06) ||
+                (signature[2] == 0x07 && signature[3] == 0x08);
+        }
+        catch { return false; }
+    }
+
+    public CommandResult Execute(CommandRequest request) => _plugins.TryGetValue(request.Plugin, out var plugin)
+        ? plugin.Execute(request.Action, request.Arguments ?? [])
+        : CommandResult.Fail("PluginNotFound", $"未找到插件：{request.Plugin}");
+
+    public async Task<CommandResult> ExecuteAsync(CommandRequest request, CancellationToken ct = default)
+    {
+        if (!_plugins.TryGetValue(request.Plugin, out var plugin))
+            return CommandResult.Fail("PluginNotFound", $"未找到插件：{request.Plugin}");
+        return plugin is IAsyncHarnessPlugin asyncPlugin
+            ? await asyncPlugin.ExecuteAsync(request.Action, request.Arguments ?? [], ct)
+            : await Task.Run(() => plugin.Execute(request.Action, request.Arguments ?? []), ct);
+    }
+
+    public bool StartHosted(string pluginId, IPluginHostContext context, out string? error)
+    {
+        error = null;
+        if (!_plugins.TryGetValue(pluginId, out var plugin))
+        {
+            error = $"未找到插件：{pluginId}";
+            return false;
+        }
+        if (plugin is not IHostedHarnessPlugin hosted)
+        {
+            error = $"插件 {plugin.Descriptor.Name} 不支持托管生命周期。";
+            return false;
+        }
+        try { hosted.Start(context); return true; }
+        catch (Exception exception) { error = exception.GetBaseException().Message; return false; }
+    }
+
+    public void StopHosted(string? pluginId)
+    {
+        if (pluginId is not null && _plugins.TryGetValue(pluginId, out var plugin) && plugin is IHostedHarnessPlugin hosted)
+        {
+            try { hosted.Stop(); } catch { /* shutdown must continue */ }
+        }
+    }
+
+    public void Dispose()
+    {
+        foreach (var plugin in _plugins.Values)
+        {
+            if (plugin is IHostedHarnessPlugin hosted) { try { hosted.Stop(); } catch { /* shutdown must continue */ } }
+            try { plugin.Dispose(); } catch { /* shutdown must continue */ }
+        }
+        _plugins.Clear();
+        _sourcePaths.Clear();
+    }
+
+    private sealed record Manifest(string Id, int ApiVersion, string EntryAssembly, string EntryType);
+
+    private sealed class PluginLoadContext(string entry) : AssemblyLoadContext
+    {
+        private readonly AssemblyDependencyResolver _resolver = new(entry);
+        protected override Assembly? Load(AssemblyName name)
+        {
+            if (name.Name == typeof(IHarnessPlugin).Assembly.GetName().Name) return typeof(IHarnessPlugin).Assembly;
+            var path = _resolver.ResolveAssemblyToPath(name);
+            return path is null ? null : LoadFromAssemblyPath(path);
+        }
+        protected override nint LoadUnmanagedDll(string name)
+        {
+            var path = _resolver.ResolveUnmanagedDllToPath(name);
+            return path is null ? 0 : LoadUnmanagedDllFromPath(path);
+        }
+    }
+}

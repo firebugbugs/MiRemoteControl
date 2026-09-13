@@ -1,0 +1,18 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="MiRemoteControl.Desktop.VoicePromptWindow"
+        Title="语音提示" Width="230" Height="64"
+        SystemDecorations="None" ExtendClientAreaToDecorationsHint="True"
+        TransparencyLevelHint="Transparent" Background="Transparent"
+        ShowActivated="False" ShowInTaskbar="False" Topmost="True"
+        Focusable="False" IsHitTestVisible="False">
+  <Border CornerRadius="18" Background="#E614181F" Padding="22,0"
+          HorizontalAlignment="Center" VerticalAlignment="Center"
+          BoxShadow="0 10 28 #59000000">
+    <StackPanel Orientation="Horizontal" Spacing="11">
+      <Ellipse Width="11" Height="11" Fill="#57DDBB"/>
+      <TextBlock Text="语音识别中..." FontSize="16" FontWeight="SemiBold"
+                 Foreground="#F5F7FA" VerticalAlignment="Center"/>
+    </StackPanel>
+  </Border>
+</Window>

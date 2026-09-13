@@ -1,0 +1,31 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="MiRemoteControl.Desktop.BigScreenTextWindow"
+        Title="大屏文字"
+        Icon="/Assets/head_portrait.ico"
+        WindowDecorations="None"
+        WindowState="FullScreen"
+        CanResize="False"
+        ShowActivated="False"
+        Focusable="False"
+        IsHitTestVisible="True"
+        ShowInTaskbar="False"
+        Topmost="True"
+        Background="#07090C"
+        PointerPressed="OnPointerPressed"
+        KeyDown="OnKeyDown">
+    <Grid Background="#07090C">
+        <TextBlock Name="DisplayTextBlock"
+                   Margin="96,72"
+                   HorizontalAlignment="Stretch"
+                   VerticalAlignment="Center"
+                   Foreground="#F8FAFC"
+                   FontFamily="Inter, Microsoft YaHei UI"
+                   FontSize="140"
+                   FontWeight="SemiBold"
+                   LineHeight="170"
+                   Text="暂无输入内容"
+                   TextAlignment="Center"
+                   TextWrapping="Wrap"/>
+    </Grid>
+</Window>

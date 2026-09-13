@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/plugins/">
+    <Project Path="plugins/MiRemoteControl.Plugin.XiaomiRemote/MiRemoteControl.Plugin.XiaomiRemote.csproj" />
+    <Project Path="plugins/MiRemoteControl.Plugin.ZCode/MiRemoteControl.Plugin.ZCode.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/MiRemoteControl.Cli/MiRemoteControl.Cli.csproj" />
+    <Project Path="src/MiRemoteControl.Client/MiRemoteControl.Client.csproj" />
+    <Project Path="src/MiRemoteControl.Contracts/MiRemoteControl.Contracts.csproj" />
+    <Project Path="src/MiRemoteControl.Core/MiRemoteControl.Core.csproj" />
+    <Project Path="src/MiRemoteControl.Desktop/MiRemoteControl.Desktop.csproj" />
+    <Project Path="src/MiRemoteControl.Host/MiRemoteControl.Host.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,411 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:MiRemoteControl.Desktop.Controls"
+        x:Class="MiRemoteControl.Desktop.MainWindow"
+        Title="MiRemoteControl" Icon="/Assets/head_portrait.ico"
+        Width="1080" Height="940" MinWidth="940" MinHeight="800"
+        WindowStartupLocation="CenterScreen" WindowDecorations="None"
+        ExtendClientAreaToDecorationsHint="True"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent"
+        Foreground="{DynamicResource Theme.TextPrimary}"
+        Closing="OnWindowClosing" Closed="OnWindowClosed">
+
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="Theme.FrameBackground" Color="#F7F9FA"/>
+          <SolidColorBrush x:Key="Theme.TitleBackground" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="Theme.Surface" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="Theme.SurfaceAlt" Color="#F7F9FA"/>
+          <SolidColorBrush x:Key="Theme.SurfaceSelected" Color="#EFFAF6"/>
+          <SolidColorBrush x:Key="Theme.Border" Color="#DCE3E8"/>
+          <SolidColorBrush x:Key="Theme.BorderStrong" Color="#C9D3DA"/>
+          <SolidColorBrush x:Key="Theme.TextPrimary" Color="#1B252D"/>
+          <SolidColorBrush x:Key="Theme.TextSecondary" Color="#5F6E79"/>
+          <SolidColorBrush x:Key="Theme.TextMuted" Color="#87949E"/>
+          <SolidColorBrush x:Key="Theme.ButtonBackground" Color="#F4F7F8"/>
+          <SolidColorBrush x:Key="Theme.ButtonHover" Color="#E7ECEF"/>
+          <SolidColorBrush x:Key="Theme.ButtonPressed" Color="#DCE4E8"/>
+          <SolidColorBrush x:Key="Theme.AccentSurface" Color="#E8F8F1"/>
+          <SolidColorBrush x:Key="Theme.AccentBorder" Color="#70C6A9"/>
+          <SolidColorBrush x:Key="Theme.AccentText" Color="#16775C"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="Theme.FrameBackground" Color="#0B0D10"/>
+          <SolidColorBrush x:Key="Theme.TitleBackground" Color="#0E1115"/>
+          <SolidColorBrush x:Key="Theme.Surface" Color="#15191E"/>
+          <SolidColorBrush x:Key="Theme.SurfaceAlt" Color="#101419"/>
+          <SolidColorBrush x:Key="Theme.SurfaceSelected" Color="#18201F"/>
+          <SolidColorBrush x:Key="Theme.Border" Color="#242B32"/>
+          <SolidColorBrush x:Key="Theme.BorderStrong" Color="#303840"/>
+          <SolidColorBrush x:Key="Theme.TextPrimary" Color="#F5F7FA"/>
+          <SolidColorBrush x:Key="Theme.TextSecondary" Color="#89939E"/>
+          <SolidColorBrush x:Key="Theme.TextMuted" Color="#75818B"/>
+          <SolidColorBrush x:Key="Theme.ButtonBackground" Color="#1D2329"/>
+          <SolidColorBrush x:Key="Theme.ButtonHover" Color="#283039"/>
+          <SolidColorBrush x:Key="Theme.ButtonPressed" Color="#18201F"/>
+          <SolidColorBrush x:Key="Theme.AccentSurface" Color="#142720"/>
+          <SolidColorBrush x:Key="Theme.AccentBorder" Color="#397C6D"/>
+          <SolidColorBrush x:Key="Theme.AccentText" Color="#76E2BE"/>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+
+      <LinearGradientBrush x:Key="RemoteBody" StartPoint="0%,0%" EndPoint="100%,0%">
+        <GradientStop Color="#8D8F8D" Offset="0"/><GradientStop Color="#E8E9E7" Offset="0.035"/>
+        <GradientStop Color="#F4F4F2" Offset="0.075"/><GradientStop Color="#D9DAD8" Offset="0.52"/>
+        <GradientStop Color="#D2D3D1" Offset="0.88"/><GradientStop Color="#777977" Offset="0.985"/>
+        <GradientStop Color="#BFC0BE" Offset="1"/>
+      </LinearGradientBrush>
+      <LinearGradientBrush x:Key="DarkButton" StartPoint="0%,0%" EndPoint="0%,100%">
+        <GradientStop Color="#303231" Offset="0"/><GradientStop Color="#242625" Offset="0.48"/>
+        <GradientStop Color="#202221" Offset="1"/>
+      </LinearGradientBrush>
+      <LinearGradientBrush x:Key="DarkButtonPressed" StartPoint="0%,0%" EndPoint="0%,100%">
+        <GradientStop Color="#3D7569" Offset="0"/><GradientStop Color="#225D52" Offset="1"/>
+      </LinearGradientBrush>
+    </ResourceDictionary>
+  </Window.Resources>
+
+  <Window.Styles>
+    <Style Selector="Button.compact">
+      <Setter Property="Foreground" Value="{DynamicResource Theme.TextPrimary}"/>
+      <Setter Property="Background" Value="{DynamicResource Theme.ButtonBackground}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Theme.BorderStrong}"/>
+      <Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="7"/>
+      <Setter Property="Padding" Value="13,7"/><Setter Property="FontSize" Value="12.5"/>
+    </Style>
+    <Style Selector="Button.compact:pointerover"><Setter Property="Background" Value="{DynamicResource Theme.ButtonHover}"/></Style>
+    <Style Selector="Button.compact:pressed"><Setter Property="Background" Value="{DynamicResource Theme.ButtonPressed}"/></Style>
+    <Style Selector="Button.caption">
+      <Setter Property="Width" Value="42"/><Setter Property="Height" Value="38"/><Setter Property="Padding" Value="0"/>
+      <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="{DynamicResource Theme.TextSecondary}"/>
+      <Setter Property="BorderThickness" Value="0"/><Setter Property="CornerRadius" Value="7"/>
+    </Style>
+    <Style Selector="Button.caption:pointerover"><Setter Property="Background" Value="{DynamicResource Theme.ButtonHover}"/><Setter Property="Foreground" Value="{DynamicResource Theme.TextPrimary}"/></Style>
+    <Style Selector="Button.close:pointerover"><Setter Property="Background" Value="#D6424E"/><Setter Property="Foreground" Value="White"/></Style>
+    <Style Selector="Border.title-logo">
+      <Setter Property="RenderTransformOrigin" Value="50%,50%"/>
+      <Setter Property="RenderTransform" Value="scale(1)"/>
+      <Setter Property="Transitions">
+        <Transitions>
+          <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.46">
+            <TransformOperationsTransition.Easing>
+              <SpringEasing Mass="1" Stiffness="300" Damping="22" InitialVelocity="0"/>
+            </TransformOperationsTransition.Easing>
+          </TransformOperationsTransition>
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="Image.title-logo-image">
+      <Setter Property="RenderTransformOrigin" Value="50%,50%"/>
+      <Setter Property="RenderTransform" Value="rotate(0deg)"/>
+      <Setter Property="Transitions">
+        <Transitions>
+          <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.68" Delay="0:0:0.07">
+            <TransformOperationsTransition.Easing>
+              <SpringEasing Mass="1" Stiffness="220" Damping="20" InitialVelocity="0"/>
+            </TransformOperationsTransition.Easing>
+          </TransformOperationsTransition>
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="Border.title-logo:pointerover">
+      <Setter Property="RenderTransform" Value="scale(1.12)"/>
+    </Style>
+    <Style Selector="Border.title-logo:pointerover Image.title-logo-image">
+      <Setter Property="RenderTransform" Value="rotate(360deg)"/>
+    </Style>
+    <Style Selector="FlyoutPresenter.settings-flyout">
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="CornerRadius" Value="12"/>
+    </Style>
+    <Style Selector="Border.settings-menu-row">
+      <Setter Property="Height" Value="48"/>
+      <Setter Property="Padding" Value="12,0"/>
+      <Setter Property="CornerRadius" Value="8"/>
+      <Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="Border.settings-menu-row:pointerover"><Setter Property="Background" Value="{DynamicResource Theme.ButtonHover}"/></Style>
+    <Style Selector="Button.settings-menu-item">
+      <Setter Property="Height" Value="46"/>
+      <Setter Property="Padding" Value="12,0"/>
+      <Setter Property="Foreground" Value="{DynamicResource Theme.TextPrimary}"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="CornerRadius" Value="8"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+    </Style>
+    <Style Selector="Button.settings-menu-item:pointerover"><Setter Property="Background" Value="{DynamicResource Theme.ButtonHover}"/></Style>
+    <Style Selector="Button.settings-menu-item:pressed"><Setter Property="Background" Value="{DynamicResource Theme.ButtonPressed}"/></Style>
+
+    <Style Selector="ToggleButton.circle">
+      <Setter Property="Width" Value="65"/><Setter Property="Height" Value="65"/><Setter Property="Padding" Value="0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Foreground" Value="#D5D6D4"/><Setter Property="Background" Value="{StaticResource DarkButton}"/>
+      <Setter Property="BorderBrush" Value="#111312"/><Setter Property="BorderThickness" Value="1.4"/>
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Grid>
+            <Ellipse Fill="{TemplateBinding Background}" Stroke="{TemplateBinding BorderBrush}" StrokeThickness="{TemplateBinding BorderThickness}"/>
+            <Ellipse Margin="2" Stroke="#20FFFFFF" StrokeThickness="0.7"/>
+            <ContentPresenter Content="{TemplateBinding Content}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                              HorizontalContentAlignment="Center" VerticalContentAlignment="Center"/>
+          </Grid>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="ToggleButton.circle:checked"><Setter Property="Background" Value="{StaticResource DarkButtonPressed}"/><Setter Property="BorderBrush" Value="#7CF1D8"/></Style>
+
+    <Style Selector="ToggleButton.top">
+      <Setter Property="Width" Value="47"/><Setter Property="Height" Value="47"/><Setter Property="Padding" Value="0"/>
+      <Setter Property="Foreground" Value="#5B5E5C"/><Setter Property="Background" Value="#0AFFFFFF"/>
+      <Setter Property="BorderBrush" Value="#5F6260"/><Setter Property="BorderThickness" Value="1.15"/>
+      <Setter Property="Template"><ControlTemplate><Grid><Ellipse Fill="{TemplateBinding Background}" Stroke="{TemplateBinding BorderBrush}" StrokeThickness="{TemplateBinding BorderThickness}"/><Ellipse Margin="1.8" Stroke="#65FFFFFF" StrokeThickness="0.65"/><ContentPresenter Content="{TemplateBinding Content}" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"/></Grid></ControlTemplate></Setter>
+    </Style>
+    <Style Selector="ToggleButton.top:checked"><Setter Property="Background" Value="#2B8B79"/><Setter Property="BorderBrush" Value="#7CF1D8"/></Style>
+
+    <Style Selector="ToggleButton.dpad">
+      <Setter Property="Padding" Value="0"/><Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/><Setter Property="Foreground" Value="#AEB1AE"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Background="{TemplateBinding Background}" CornerRadius="18">
+            <ContentPresenter Content="{TemplateBinding Content}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                              HorizontalContentAlignment="Center" VerticalContentAlignment="Center"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="ToggleButton.dpad:pointerover"><Setter Property="Background" Value="#14FFFFFF"/></Style>
+    <Style Selector="ToggleButton.dpad:checked"><Setter Property="Background" Value="#6648CDB0"/><Setter Property="Foreground" Value="#E8FFFA"/></Style>
+    <Style Selector="ToggleButton.center">
+      <Setter Property="Width" Value="88"/><Setter Property="Height" Value="88"/><Setter Property="Padding" Value="0"/>
+      <Setter Property="Background" Value="#292B2A"/><Setter Property="BorderBrush" Value="#0D0F0E"/><Setter Property="BorderThickness" Value="1.3"/>
+      <Setter Property="Template"><ControlTemplate><Grid><Ellipse Fill="{TemplateBinding Background}" Stroke="{TemplateBinding BorderBrush}" StrokeThickness="{TemplateBinding BorderThickness}"/><Ellipse Margin="1.8" Stroke="#287F817E" StrokeThickness="0.8"/><ContentPresenter Content="{TemplateBinding Content}" HorizontalAlignment="Center" VerticalAlignment="Center"/></Grid></ControlTemplate></Setter>
+    </Style>
+    <Style Selector="ToggleButton.center:pointerover"><Setter Property="Background" Value="#343735"/></Style>
+    <Style Selector="ToggleButton.center:checked"><Setter Property="Background" Value="{StaticResource DarkButtonPressed}"/><Setter Property="BorderBrush" Value="#7CF1D8"/></Style>
+    <Style Selector="ToggleButton.volume">
+      <Setter Property="Padding" Value="0"/><Setter Property="Foreground" Value="#CDCFCD"/><Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/><Setter Property="VerticalAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Template"><ControlTemplate><Border Background="{TemplateBinding Background}" CornerRadius="28" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"><ContentPresenter Content="{TemplateBinding Content}" HorizontalAlignment="Center" VerticalAlignment="Center" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"/></Border></ControlTemplate></Setter>
+    </Style>
+    <Style Selector="ToggleButton.volume:pointerover"><Setter Property="Background" Value="#14FFFFFF"/></Style>
+    <Style Selector="ToggleButton.volume:checked"><Setter Property="Background" Value="#6648CDB0"/><Setter Property="Foreground" Value="#E8FFFA"/></Style>
+    <Style Selector="ComboBox"><Setter Property="Foreground" Value="{DynamicResource Theme.TextPrimary}"/><Setter Property="Background" Value="{DynamicResource Theme.ButtonBackground}"/><Setter Property="BorderBrush" Value="{DynamicResource Theme.BorderStrong}"/><Setter Property="CornerRadius" Value="7"/></Style>
+  </Window.Styles>
+
+  <Border Name="WindowFrame" Background="{DynamicResource Theme.FrameBackground}" BorderBrush="{DynamicResource Theme.BorderStrong}" BorderThickness="1" CornerRadius="9">
+    <Grid RowDefinitions="48,*">
+      <Border Name="TitleBar" Grid.Row="0" Background="{DynamicResource Theme.TitleBackground}"
+              BorderBrush="{DynamicResource Theme.Border}" BorderThickness="0,0,0,1"
+              CornerRadius="9,9,0,0" PointerPressed="TitleBarPointerPressed">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+            <Border Classes="title-logo" Width="27" Height="27" Background="Transparent" ToolTip.Tip="Mi Remote Studio">
+              <Image Classes="title-logo-image" Source="/Assets/head_portrait.png" Width="27" Height="27"/>
+            </Border>
+            <TextBlock Text="Mi Remote Studio" Margin="10,0,0,0" VerticalAlignment="Center" FontSize="13.5" FontWeight="SemiBold"/>
+            <Border Width="1" Height="14" Background="{DynamicResource Theme.BorderStrong}" Margin="12,0"/>
+            <TextBlock Text="蓝牙遥控器控制台" VerticalAlignment="Center" Foreground="{DynamicResource Theme.TextSecondary}" FontSize="12"/>
+          </StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <Button Classes="caption" Click="MinimizeWindow" ToolTip.Tip="最小化"><Grid Width="12" Height="12"><Border Width="10" Height="1.25" CornerRadius="0.625" Background="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" HorizontalAlignment="Center" VerticalAlignment="Center"/></Grid></Button>
+            <Button Classes="caption" Click="ToggleMaximizeWindow" ToolTip.Tip="最大化"><Grid Width="13" Height="13"><Path Name="MaximizeIcon" Data="M2,2 L11,2 L11,11 L2,11 Z" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.15"/><Path Name="RestoreIcon" IsVisible="False" Data="M4,1.5 L11.5,1.5 L11.5,9 M1.5,4 L9,4 L9,11.5 L1.5,11.5 Z" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.1"/></Grid></Button>
+            <Button Classes="caption close" Margin="0,0,5,0" Click="CloseWindow" ToolTip.Tip="关闭"><Path Width="12" Height="12" Data="M1.5,1.5 L10.5,10.5 M10.5,1.5 L1.5,10.5" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.25"/></Button>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <Grid Grid.Row="1" Margin="30,22,30,30" RowDefinitions="Auto,*">
+        <Grid Margin="2,0,2,22">
+          <StackPanel><TextBlock Text="Mi Remote Studio" FontSize="30" FontWeight="SemiBold"/><TextBlock Text="Xiaomi Bluetooth Remote 2 Pro · 实时输入与语音" Margin="0,5,0,0" Foreground="{DynamicResource Theme.TextSecondary}"/></StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="1" ColumnDefinitions="330,26,*">
+          <Grid Grid.Column="0" RowDefinitions="*,Auto">
+            <Viewbox Grid.Row="0" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Grid Name="RemoteControlVisual" Width="204" Height="790" Opacity="0.6" IsHitTestVisible="False">
+              <Border CornerRadius="7" Background="{StaticResource RemoteBody}" BorderBrush="#8EFFFFFF" BorderThickness="0.8"/>
+              <Border Width="3.2" Margin="4" HorizontalAlignment="Left" CornerRadius="2" Background="#6AFFFFFF"/>
+              <Border Width="2.4" Margin="4" HorizontalAlignment="Right" CornerRadius="2" Background="#54717472"/>
+              <Canvas>
+                <ToggleButton Name="PowerButton" Classes="top" Canvas.Left="27" Canvas.Top="32" IsHitTestVisible="True" Click="PowerButtonClick" ToolTip.Tip="启动或关闭当前选中的插件">
+                  <Viewbox Width="21" Height="21"><Grid Width="24" Height="24"><Path Data="M12,2 L12,11" Stroke="#5A5D5B" StrokeThickness="2.2" StrokeLineCap="Round"/><Path Data="M7.15,5.45 C4.65,7.05 3.35,9.65 3.72,12.42 C4.2,16.05 7.18,18.83 10.84,19.08 C15.42,19.39 19.25,15.75 19.25,11.23 C19.25,8.84 18.17,6.69 16.46,5.25" Stroke="#5A5D5B" StrokeThickness="2.2" StrokeLineCap="Round" Fill="Transparent"/></Grid></Viewbox>
+                </ToggleButton>
+                <ToggleButton Name="VoiceButton" Classes="top" Canvas.Left="130" Canvas.Top="32" IsHitTestVisible="False">
+                  <Viewbox Width="21" Height="21"><Grid Width="24" Height="24"><Path Data="M8,6.8 C8,3.9 9.6,2.25 12,2.25 C14.4,2.25 16,3.9 16,6.8 L16,11.2 C16,14.1 14.4,15.75 12,15.75 C9.6,15.75 8,14.1 8,11.2 Z" Stroke="#5A5D5B" StrokeThickness="1.8" StrokeLineCap="Round" StrokeJoin="Round" Fill="Transparent"/><Path Data="M4.9,10.3 C4.9,14.7 7.7,17.7 12,17.7 C16.3,17.7 19.1,14.7 19.1,10.3 M12,17.7 L12,21 M8.7,21 L15.3,21" Stroke="#5A5D5B" StrokeThickness="1.8" StrokeLineCap="Round" Fill="Transparent"/></Grid></Viewbox>
+                </ToggleButton>
+
+                <Grid Width="170" Height="170" Canvas.Left="17" Canvas.Top="101">
+                  <Ellipse Fill="#242625" Stroke="#6C6F6D" StrokeThickness="1.4"/>
+                  <Ellipse Margin="2" Stroke="#22000000" StrokeThickness="1"/>
+                  <Ellipse Width="4.2" Height="4.2" Fill="#111312" HorizontalAlignment="Left" Margin="5,0,0,0"/>
+                  <Ellipse Width="4.2" Height="4.2" Fill="#111312" HorizontalAlignment="Right" Margin="0,0,5,0"/>
+                  <ToggleButton Name="UpButton" Classes="dpad" Width="74" Height="54" VerticalAlignment="Top" HorizontalAlignment="Center"
+                                Margin="0,6,0,0" Tag="Up" Click="RemoteButtonClick" ToolTip.Tip="模拟方向上键">
+                    <Viewbox Width="17" Height="10"><Grid Width="17" Height="10"><Path Data="M2,8.5 L8.5,2 L15,8.5" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}" StrokeThickness="1.7" StrokeLineCap="Round" StrokeJoin="Round" Fill="Transparent"/></Grid></Viewbox>
+                  </ToggleButton>
+                  <ToggleButton Name="DownButton" Classes="dpad" Width="74" Height="54" VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                                Margin="0,0,0,6" Tag="Down" Click="RemoteButtonClick" ToolTip.Tip="模拟方向下键">
+                    <Viewbox Width="17" Height="10"><Grid Width="17" Height="10"><Path Data="M2,1.5 L8.5,8 L15,1.5" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}" StrokeThickness="1.7" StrokeLineCap="Round" StrokeJoin="Round" Fill="Transparent"/></Grid></Viewbox>
+                  </ToggleButton>
+                  <ToggleButton Name="LeftButton" Classes="dpad" Width="54" Height="74" HorizontalAlignment="Left" VerticalAlignment="Center"
+                                Margin="6,0,0,0" Tag="Left" Click="RemoteButtonClick" ToolTip.Tip="模拟方向左键">
+                    <Viewbox Width="10" Height="17"><Grid Width="10" Height="17"><Path Data="M8.5,2 L2,8.5 L8.5,15" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}" StrokeThickness="1.7" StrokeLineCap="Round" StrokeJoin="Round" Fill="Transparent"/></Grid></Viewbox>
+                  </ToggleButton>
+                  <ToggleButton Name="RightButton" Classes="dpad" Width="54" Height="74" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Margin="0,0,6,0" Tag="Right" Click="RemoteButtonClick" ToolTip.Tip="模拟方向右键">
+                    <Viewbox Width="10" Height="17"><Grid Width="10" Height="17"><Path Data="M1.5,2 L8,8.5 L1.5,15" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}" StrokeThickness="1.7" StrokeLineCap="Round" StrokeJoin="Round" Fill="Transparent"/></Grid></Viewbox>
+                  </ToggleButton>
+                  <ToggleButton Name="OkButton" Classes="center" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Tag="Ok" Click="RemoteButtonClick" ToolTip.Tip="模拟确认键"/>
+                </Grid>
+
+                <ToggleButton Name="BackButton" Classes="circle" Canvas.Left="27" Canvas.Top="282" Tag="Back" Click="RemoteButtonClick" ToolTip.Tip="模拟返回键"><Viewbox Width="18" Height="20"><Grid Width="18" Height="20"><Path Data="M12.5,3 L5.5,10 L12.5,17" Stroke="#C7C9C7" StrokeThickness="1.8" StrokeLineCap="Round" StrokeJoin="Round" Fill="Transparent"/></Grid></Viewbox></ToggleButton>
+                <ToggleButton Name="HomeButton" Classes="circle" Canvas.Left="27" Canvas.Top="360" Tag="Home" Click="RemoteButtonClick" ToolTip.Tip="模拟主页键"><Viewbox Width="21" Height="21"><Grid Width="24" Height="24"><Path Data="M4.5,11.5 L12,5 L19.5,11.5 L19.5,19 L4.5,19 Z" Stroke="#C7C9C7" StrokeThickness="1.65" StrokeLineCap="Round" StrokeJoin="Round" Fill="Transparent"/></Grid></Viewbox></ToggleButton>
+                <ToggleButton Name="MenuButton" Classes="circle" Canvas.Left="27" Canvas.Top="438" Tag="Menu" Click="RemoteButtonClick" ToolTip.Tip="模拟菜单键"><Viewbox Width="21" Height="21"><Grid Width="24" Height="24"><Path Data="M5,7 L19,7 M5,12 L19,12 M5,17 L19,17" Stroke="#C7C9C7" StrokeThickness="1.8" StrokeLineCap="Round"/></Grid></Viewbox></ToggleButton>
+
+                <Border Width="65" Height="143" Canvas.Left="112" Canvas.Top="282" CornerRadius="32.5" Background="{StaticResource DarkButton}" BorderBrush="#111312" BorderThickness="1.4">
+                  <Grid RowDefinitions="*,*" ClipToBounds="True">
+                    <Border Height="1" Background="#1FFFFFFF" VerticalAlignment="Bottom" Margin="12,0"/>
+                    <ToggleButton Name="VolumeUpButton" Classes="volume" Tag="VolumeUp" Click="RemoteButtonClick" ToolTip.Tip="模拟音量加键">
+                      <Grid Width="20" Height="20"><Path Data="M3,10 L17,10 M10,3 L10,17" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}" StrokeThickness="1.65" StrokeLineCap="Round"/></Grid>
+                    </ToggleButton>
+                    <ToggleButton Name="VolumeDownButton" Grid.Row="1" Classes="volume" Tag="VolumeDown" Click="RemoteButtonClick" ToolTip.Tip="模拟音量减键">
+                      <Grid Width="20" Height="20"><Path Data="M3,10 L17,10" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}" StrokeThickness="1.65" StrokeLineCap="Round"/></Grid>
+                    </ToggleButton>
+                  </Grid>
+                </Border>
+                <ToggleButton Name="TvButton" Classes="circle" Canvas.Left="112" Canvas.Top="438" Tag="Tv" Click="RemoteButtonClick" ToolTip.Tip="模拟电视键"><Viewbox Width="25" Height="25"><Grid Width="28" Height="28"><Border Width="23" Height="16" CornerRadius="4" BorderBrush="#C7C9C7" BorderThickness="1.6"/><TextBlock Text="TV" Foreground="#C7C9C7" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/></Grid></Viewbox></ToggleButton>
+                <Viewbox Width="19" Height="21" Canvas.Left="92.5" Canvas.Top="588"><Grid Width="20" Height="22"><Path Data="M4,18 L4,4 L8,4 L16,14 L16,18 L13,18 L7,10 L7,18 Z" Fill="#515552"/><Path Data="M10,4 L16,4 L16,11 Z" Fill="#515552"/><Path Data="M8,6 L14,6 L14,12 Z" Fill="#D4D5D2"/></Grid></Viewbox>
+                <TextBlock Text="x i a o m i" Canvas.Left="52" Canvas.Top="723" Width="100" TextAlignment="Center" FontSize="14.5" FontWeight="SemiBold" Foreground="#454946"/>
+              </Canvas>
+            </Grid>
+            </Viewbox>
+            <Grid Name="RemoteBatteryBadge" Grid.Row="1" Width="51" Height="26" Margin="0,10,0,0"
+                  HorizontalAlignment="Center" ColumnDefinitions="46,5"
+                  ToolTip.Tip="正在读取遥控器电量">
+              <Border Grid.Column="0" CornerRadius="7" Background="#777D7B" ClipToBounds="True">
+                <Grid>
+                  <Border Name="RemoteBatteryFill" Width="0" HorizontalAlignment="Left"
+                          Background="#38C956" CornerRadius="7,0,0,7"/>
+                  <TextBlock Name="RemoteBatteryText" Text="--" HorizontalAlignment="Center"
+                             VerticalAlignment="Center" Foreground="White" FontSize="12.5" FontWeight="Bold"/>
+                </Grid>
+              </Border>
+              <Border Grid.Column="1" Width="4" Height="11" HorizontalAlignment="Left"
+                      VerticalAlignment="Center" CornerRadius="0,2,2,0" Background="#777D7B"/>
+            </Grid>
+          </Grid>
+
+          <Grid Grid.Column="2" RowDefinitions="Auto,*">
+            <Border Background="{DynamicResource Theme.Surface}" CornerRadius="16" BorderBrush="{DynamicResource Theme.Border}" BorderThickness="1" Padding="24" MinHeight="228">
+              <Grid RowDefinitions="Auto,*,Auto">
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Ellipse Width="7" Height="7" Fill="#57DDBB" Margin="0,0,9,0"/><TextBlock Text="语音输入" FontSize="16" FontWeight="SemiBold"/></StackPanel>
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="9">
+                    <TextBlock Name="VoiceTranslationStatus" Text="等待语音" FontSize="12" Foreground="{DynamicResource Theme.TextMuted}" VerticalAlignment="Center"/>
+                    <Button Name="LatestVoicePlaybackButton" Classes="compact" Width="32" Height="32" Padding="0" IsEnabled="False" Click="ToggleLatestVoicePlayback" ToolTip.Tip="暂无上一条语音">
+                      <Grid Width="15" Height="15">
+                        <Path Name="LatestVoicePlayIcon" Data="M4,2 L13,7.5 L4,13 Z" Fill="{DynamicResource Theme.TextSecondary}" Stretch="Uniform"/>
+                        <Grid Name="LatestVoicePauseIcon" IsVisible="False" ColumnDefinitions="*,*" ColumnSpacing="4" Margin="2,1">
+                          <Border Background="{DynamicResource Theme.TextSecondary}" CornerRadius="1"/>
+                          <Border Grid.Column="1" Background="{DynamicResource Theme.TextSecondary}" CornerRadius="1"/>
+                        </Grid>
+                      </Grid>
+                    </Button>
+                  </StackPanel>
+                </Grid>
+                <TextBlock Name="VoiceResult" Grid.Row="1" Text="按住遥控器语音键开始说话" FontSize="26" FontWeight="Medium" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,18,0,8"/>
+                <Grid Grid.Row="2" Margin="0,12,0,0" ColumnDefinitions="Auto,*,Auto">
+                  <TextBlock Text="识别模型" Foreground="{DynamicResource Theme.TextSecondary}" FontSize="12.5" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                  <ComboBox Name="VoiceModelSelector" Grid.Column="1" Height="34" SelectionChanged="VoiceModelSelectionChanged" ToolTip.Tip="选择本地 GGML 或 ONNX 语音识别模型"/>
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" Margin="12,0,0,0"><Button Classes="compact" Content="模型管理" Click="OpenModelManager"/><Button Classes="compact" Content="打开模型位置" Click="OpenVoiceModelFolder"/></StackPanel>
+                </Grid>
+              </Grid>
+            </Border>
+
+            <Border Grid.Row="1" Margin="0,16,0,0" Background="{DynamicResource Theme.SurfaceAlt}" CornerRadius="14" BorderBrush="{DynamicResource Theme.Border}" BorderThickness="1">
+              <Grid RowDefinitions="56,*">
+                <Grid Margin="18,0,12,0" ColumnDefinitions="*,Auto,Auto">
+                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="插件控制" FontSize="14.5" FontWeight="SemiBold"/><TextBlock Name="PluginCountText" Text="正在扫描" FontSize="12" Foreground="{DynamicResource Theme.TextMuted}" Margin="10,2,0,0"/></StackPanel>
+                  <Button Grid.Column="1" Classes="compact" Content="插件管理" Click="OpenPluginManager" VerticalAlignment="Center"/>
+                  <Button Grid.Column="2" Classes="compact" Content="打开插件位置" Click="OpenPluginFolder" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                </Grid>
+                <Border Grid.Row="1" BorderBrush="{DynamicResource Theme.Border}" BorderThickness="0,1,0,0">
+                  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="18">
+                    <StackPanel>
+                      <Border Name="ZCodePluginCard" IsVisible="False" Background="{DynamicResource Theme.SurfaceSelected}" BorderBrush="{DynamicResource Theme.AccentBorder}" BorderThickness="1.2" CornerRadius="11" Padding="16">
+                        <Grid RowDefinitions="Auto,Auto">
+                          <Grid ColumnDefinitions="42,*,Auto,Auto">
+                            <Border Width="34" Height="34" CornerRadius="9" Background="#5A4BCB"><TextBlock Text="Z" FontSize="17" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                            <StackPanel Grid.Column="1" Margin="2,0,12,0"><TextBlock Text="ZCode 控制" FontSize="15" FontWeight="SemiBold"/><TextBlock Name="ZCodePluginStatus" Text="正在检查后台状态" FontSize="12" Foreground="{DynamicResource Theme.TextMuted}" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/></StackPanel>
+                            <RadioButton Name="ZCodePluginSelector" Grid.Column="2" GroupName="WorkingPlugin" Tag="mrc.zcode" IsChecked="True" Content="工作插件" Click="SelectPlugin" Margin="0,0,8,0" VerticalAlignment="Top"/>
+                            <Border Grid.Column="3" Name="ZCodeAvailabilityBadge" Background="{DynamicResource Theme.ButtonBackground}" CornerRadius="9" Padding="9,4" VerticalAlignment="Top"><TextBlock Name="ZCodeAvailabilityText" Text="已安装" FontSize="11" Foreground="{DynamicResource Theme.TextSecondary}"/></Border>
+                          </Grid>
+                          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="42,14,0,0"><Button Name="OpenZCodeButton" Classes="compact" Content="打开 ZCode" Click="OpenZCode"/><Button Name="ReadZCodeStatusButton" Classes="compact" Content="读取状态" Click="ReadZCodeStatus" Margin="8,0,0,0"/><Button Name="StopZCodeTaskButton" Classes="compact" Content="停止任务" Click="StopZCodeTask" Margin="8,0,0,0"/></StackPanel>
+                        </Grid>
+                      </Border>
+                      <TextBlock Name="NoPluginsText" Text="未发现单文件插件" Foreground="{DynamicResource Theme.TextMuted}" HorizontalAlignment="Center" Margin="0,22"/>
+                    </StackPanel>
+                  </ScrollViewer>
+                </Border>
+              </Grid>
+            </Border>
+          </Grid>
+        </Grid>
+      </Grid>
+
+      <Button Grid.Row="1" Name="SettingsMenuButton" Classes="compact" Width="40" Height="40" Padding="0" Margin="18"
+              HorizontalAlignment="Left" VerticalAlignment="Bottom" ToolTip.Tip="显示设置" AutomationProperties.Name="打开显示设置菜单">
+        <Button.Flyout>
+          <Flyout Placement="TopEdgeAlignedLeft" FlyoutPresenterClasses="settings-flyout">
+            <Border Width="286" Padding="6" CornerRadius="12" Background="{DynamicResource Theme.Surface}" BorderBrush="{DynamicResource Theme.BorderStrong}" BorderThickness="1">
+              <Grid RowDefinitions="48,2,48,2,46,2,46">
+                <Border Grid.Row="0" Classes="settings-menu-row" HorizontalAlignment="Stretch">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="界面主题" FontSize="13.5" VerticalAlignment="Center"/>
+                    <local:DayNightSwitch Name="DayNightSwitch" Grid.Column="1" Width="56" Height="30" Margin="12,0,0,0" IsChecked="False" Click="ThemeSwitchChanged" AutomationProperties.Name="日夜主题切换"/>
+                  </Grid>
+                </Border>
+                <Border Grid.Row="2" Classes="settings-menu-row" HorizontalAlignment="Stretch">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="随系统启动" FontSize="13.5" VerticalAlignment="Center"/>
+                    <ToggleSwitch Name="StartWithWindowsSwitch" Grid.Column="1" Width="48" OnContent="" OffContent=""
+                                  VerticalAlignment="Center" Click="StartWithWindowsChanged" AutomationProperties.Name="随系统启动"/>
+                  </Grid>
+                </Border>
+                <Button Grid.Row="4" Classes="settings-menu-item" HorizontalAlignment="Stretch" Tag="about" Click="AboutMenuClick" AutomationProperties.Name="关于 Mi Remote Studio">
+                  <Grid ColumnDefinitions="28,*,Auto">
+                    <Border Width="20" Height="20" CornerRadius="10" Background="{DynamicResource Theme.AccentSurface}" VerticalAlignment="Center">
+                      <TextBlock Text="i" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource Theme.AccentText}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock Grid.Column="1" Text="关于 Mi Remote Studio" FontSize="13.5" VerticalAlignment="Center"/>
+                    <Path Grid.Column="2" Width="7" Height="12" Data="M2,1 L7,6 L2,11" Stroke="{DynamicResource Theme.TextMuted}" StrokeThickness="1.4" VerticalAlignment="Center"/>
+                  </Grid>
+                </Button>
+                <Button Grid.Row="6" Classes="settings-menu-item" HorizontalAlignment="Stretch" Click="CheckAppUpdate">
+                  <Grid ColumnDefinitions="28,*">
+                    <Border Width="20" Height="20" CornerRadius="10" Background="{DynamicResource Theme.AccentSurface}" VerticalAlignment="Center">
+                      <Path Width="14" Height="14" Stretch="Uniform" Fill="{DynamicResource Theme.AccentText}"
+                            Data="M17.65,6.35 C16.2,4.9 14.21,4 12,4 C7.58,4 4.01,7.58 4.01,12 C4.01,16.42 7.58,20 12,20 C15.73,20 18.84,17.45 19.73,14 L17.65,14 C16.83,16.33 14.61,18 12,18 C8.69,18 6,15.31 6,12 C6,8.69 8.69,6 12,6 C13.66,6 15.14,6.69 16.22,7.78 L13,11 L20,11 L20,4 L17.65,6.35 Z"/>
+                    </Border>
+                    <TextBlock Grid.Column="1" Text="检查更新" FontSize="13.5" VerticalAlignment="Center"/>
+                  </Grid>
+                </Button>
+              </Grid>
+            </Border>
+          </Flyout>
+        </Button.Flyout>
+        <Viewbox Width="18" Height="18"><Path Data="M2,4 L18,4 M2,10 L18,10 M2,16 L18,16" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.8"/></Viewbox>
+      </Button>
+    </Grid>
+  </Border>
+</Window>
