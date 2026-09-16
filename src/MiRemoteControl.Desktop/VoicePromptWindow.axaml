@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="MiRemoteControl.Desktop.VoicePromptWindow"
         Title="语音提示" Width="230" Height="64"
-        SystemDecorations="None" ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="None" ExtendClientAreaToDecorationsHint="True"
         TransparencyLevelHint="Transparent" Background="Transparent"
         ShowActivated="False" ShowInTaskbar="False" Topmost="True"
         Focusable="False" IsHitTestVisible="False">

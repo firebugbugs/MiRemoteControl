@@ -29,7 +29,7 @@ public sealed class AtvvRemoteVoiceService : IDisposable
     private BufferedPcmStream? _stream;
     private MemoryStream? _pcmCapture;
     private MemoryStream? _adpcmCapture;
-    private string _deviceName = "小米蓝牙语音遥控器";
+    private string _deviceName = "ATVV 遥控器";
     private string _message = "尚未连接";
     private string? _lastError;
     private int _predictor;
@@ -149,19 +149,34 @@ public sealed class AtvvRemoteVoiceService : IDisposable
         {
             Disconnect();
             _lastError = null;
-            _message = "正在查找 RC003…";
+            _message = "正在查找支持 ATVV 的遥控器…";
             var selector = BluetoothLEDevice.GetDeviceSelectorFromPairingState(true);
             var devices = await Windows.Devices.Enumeration.DeviceInformation.FindAllAsync(selector);
-            var info = devices.FirstOrDefault(d => IsRemoteName(d.Name));
-            if (info is null) throw new InvalidOperationException("Windows 中没有已配对的小米蓝牙语音遥控器。请先唤醒遥控器。 ");
-            _deviceName = info.Name;
-            VoiceDiagnostics.Log($"CONNECT device={_deviceName} id={info.Id}");
-            _device = await BluetoothLEDevice.FromIdAsync(info.Id) ?? throw new InvalidOperationException("无法打开遥控器的 BLE 连接。");
+            foreach (var info in devices.OrderByDescending(device => LooksLikeRemote(device.Name)))
+            {
+                BluetoothLEDevice? candidate = null;
+                try
+                {
+                    candidate = await BluetoothLEDevice.FromIdAsync(info.Id);
+                    if (candidate is null) continue;
+                    var services = await candidate.GetGattServicesForUuidAsync(ServiceId, BluetoothCacheMode.Uncached);
+                    if (services.Status != GattCommunicationStatus.Success || services.Services.Count == 0) continue;
+                    _device = candidate;
+                    candidate = null;
+                    _service = services.Services[0];
+                    _deviceName = string.IsNullOrWhiteSpace(info.Name) ? "ATVV 遥控器" : info.Name;
+                    VoiceDiagnostics.Log($"CONNECT device={_deviceName} id={info.Id} discovery=service");
+                    break;
+                }
+                catch (Exception exception)
+                {
+                    VoiceDiagnostics.Log($"DISCOVERY-SKIP id={info.Id} error={exception.GetType().Name}");
+                }
+                finally { candidate?.Dispose(); }
+            }
+            if (_device is null || _service is null)
+                throw new InvalidOperationException("没有发现可访问 ATVV 服务的已配对遥控器，请按任意键唤醒后重连。");
             await ConnectBatteryAsync();
-            var services = await _device.GetGattServicesForUuidAsync(ServiceId, BluetoothCacheMode.Uncached);
-            if (services.Status != GattCommunicationStatus.Success || services.Services.Count == 0)
-                throw new InvalidOperationException($"ATVV 服务不可访问（{services.Status}），请按任意键唤醒后重连。");
-            _service = services.Services[0];
             _tx = await GetCharacteristic(TxId);
             _audio = await GetCharacteristic(AudioId);
             _control = await GetCharacteristic(ControlId);
@@ -260,7 +275,10 @@ public sealed class AtvvRemoteVoiceService : IDisposable
         catch (Exception exception) { VoiceDiagnostics.Log($"BATTERY-CACHE-ERROR {exception.GetType().Name}: {exception.Message}"); }
     }
 
-    private static bool IsRemoteName(string name) => name.Trim() is "小米蓝牙语音遥控器" or "MI RC" or "Xiaomi Bluetooth Remote 2 Pro";
+    private static bool LooksLikeRemote(string name) =>
+        name.Contains("remote", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("遥控", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("MI RC", StringComparison.OrdinalIgnoreCase);
     private async Task<GattCharacteristic> GetCharacteristic(Guid id)
     {
         var result = await _service!.GetCharacteristicsForUuidAsync(id, BluetoothCacheMode.Uncached);
@@ -412,8 +430,8 @@ public sealed class AtvvRemoteVoiceService : IDisposable
         }
         return (peak, Math.Sqrt((double)squares / samples));
     }
-    private static readonly int[] IndexTable = [-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8];
-    private static readonly int[] StepTable = [7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767];
+    private static readonly int[] IndexTable = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8];
+    private static readonly int[] StepTable = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767];
     private void Disconnect()
     {
         StopStream();

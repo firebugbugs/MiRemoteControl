@@ -225,7 +225,7 @@
 
       <Grid Grid.Row="1" Margin="30,22,30,30" RowDefinitions="Auto,*">
         <Grid Margin="2,0,2,22">
-          <StackPanel><TextBlock Text="Mi Remote Studio" FontSize="30" FontWeight="SemiBold"/><TextBlock Text="Xiaomi Bluetooth Remote 2 Pro · 实时输入与语音" Margin="0,5,0,0" Foreground="{DynamicResource Theme.TextSecondary}"/></StackPanel>
+          <StackPanel><TextBlock Text="Mi Remote Studio" FontSize="30" FontWeight="SemiBold"/><TextBlock Text="小米蓝牙遥控器 · 实时输入与语音" Margin="0,5,0,0" Foreground="{DynamicResource Theme.TextSecondary}"/></StackPanel>
         </Grid>
 
         <Grid Grid.Row="1" ColumnDefinitions="330,26,*">
@@ -341,20 +341,7 @@
                 </Grid>
                 <Border Grid.Row="1" BorderBrush="{DynamicResource Theme.Border}" BorderThickness="0,1,0,0">
                   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="18">
-                    <StackPanel>
-                      <Border Name="ZCodePluginCard" IsVisible="False" Background="{DynamicResource Theme.SurfaceSelected}" BorderBrush="{DynamicResource Theme.AccentBorder}" BorderThickness="1.2" CornerRadius="11" Padding="16">
-                        <Grid RowDefinitions="Auto,Auto">
-                          <Grid ColumnDefinitions="42,*,Auto,Auto">
-                            <Border Width="34" Height="34" CornerRadius="9" Background="#5A4BCB"><TextBlock Text="Z" FontSize="17" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                            <StackPanel Grid.Column="1" Margin="2,0,12,0"><TextBlock Text="ZCode 控制" FontSize="15" FontWeight="SemiBold"/><TextBlock Name="ZCodePluginStatus" Text="正在检查后台状态" FontSize="12" Foreground="{DynamicResource Theme.TextMuted}" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/></StackPanel>
-                            <RadioButton Name="ZCodePluginSelector" Grid.Column="2" GroupName="WorkingPlugin" Tag="mrc.zcode" IsChecked="True" Content="工作插件" Click="SelectPlugin" Margin="0,0,8,0" VerticalAlignment="Top"/>
-                            <Border Grid.Column="3" Name="ZCodeAvailabilityBadge" Background="{DynamicResource Theme.ButtonBackground}" CornerRadius="9" Padding="9,4" VerticalAlignment="Top"><TextBlock Name="ZCodeAvailabilityText" Text="已安装" FontSize="11" Foreground="{DynamicResource Theme.TextSecondary}"/></Border>
-                          </Grid>
-                          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="42,14,0,0"><Button Name="OpenZCodeButton" Classes="compact" Content="打开 ZCode" Click="OpenZCode"/><Button Name="ReadZCodeStatusButton" Classes="compact" Content="读取状态" Click="ReadZCodeStatus" Margin="8,0,0,0"/><Button Name="StopZCodeTaskButton" Classes="compact" Content="停止任务" Click="StopZCodeTask" Margin="8,0,0,0"/></StackPanel>
-                        </Grid>
-                      </Border>
-                      <TextBlock Name="NoPluginsText" Text="未发现单文件插件" Foreground="{DynamicResource Theme.TextMuted}" HorizontalAlignment="Center" Margin="0,22"/>
-                    </StackPanel>
+                    <StackPanel Name="TargetPluginCardsPanel" Spacing="10"/>
                   </ScrollViewer>
                 </Border>
               </Grid>

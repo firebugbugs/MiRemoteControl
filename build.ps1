@@ -48,27 +48,41 @@ $remotePluginsRoot = [IO.Path]::GetFullPath((Join-Path $pluginsRoot 'remotes'))
 $targetPluginsRoot = [IO.Path]::GetFullPath((Join-Path $pluginsRoot 'targets'))
 $null = New-Item -ItemType Directory -Force -Path $remotePluginsRoot
 $null = New-Item -ItemType Directory -Force -Path $targetPluginsRoot
-$legacyPluginOutput = [IO.Path]::GetFullPath((Join-Path $pluginsRoot 'mrc.zcode'))
-if (-not $legacyPluginOutput.StartsWith($pluginsRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'Invalid legacy plugin output path'
-}
-if (Test-Path -LiteralPath $legacyPluginOutput) { Remove-Item -LiteralPath $legacyPluginOutput -Recurse -Force }
-$legacyBuiltInBundles = @('mrc.remote.xiaomi.mrcplugin', 'mrc.zcode.mrcplugin')
-foreach ($legacyBundleName in $legacyBuiltInBundles) {
-    $legacyBundle = [IO.Path]::GetFullPath((Join-Path $pluginsRoot $legacyBundleName))
-    if (-not $legacyBundle.StartsWith($pluginsRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Invalid legacy plugin bundle path'
+$pluginPackages = Get-ChildItem -LiteralPath (Join-Path $root 'plugins') -Directory | ForEach-Object {
+    $manifestPath = Join-Path $_.FullName 'plugin.json'
+    $projectPath = Get-ChildItem -LiteralPath $_.FullName -Filter '*.csproj' -File | Select-Object -First 1
+    if (-not (Test-Path -LiteralPath $manifestPath) -or $null -eq $projectPath) { return }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($manifest.id -notmatch '^[A-Za-z0-9._-]+$') { throw "Invalid plugin id in $manifestPath" }
+    $destination = switch ($manifest.kind) {
+        'remote' { $remotePluginsRoot }
+        'target' { $targetPluginsRoot }
+        default { throw "Invalid plugin kind in $manifestPath" }
     }
-    if (Test-Path -LiteralPath $legacyBundle) { Remove-Item -LiteralPath $legacyBundle -Force }
+    @{
+        ProjectDirectory = $_.FullName
+        ProjectName = $projectPath.BaseName
+        Id = $manifest.id
+        Directory = $destination
+        File = "$($manifest.id).mrcplugin"
+    }
 }
-$pluginPackages = @(
-    @{ Project = 'MiRemoteControl.Plugin.XiaomiRemote'; Directory = $remotePluginsRoot; File = 'mrc.remote.xiaomi.mrcplugin' },
-    @{ Project = 'MiRemoteControl.Plugin.ZCode'; Directory = $targetPluginsRoot; File = 'mrc.zcode.mrcplugin' }
-)
 foreach ($package in $pluginPackages) {
+    foreach ($legacyPath in @(
+        (Join-Path $pluginsRoot $package.Id),
+        (Join-Path $pluginsRoot $package.File)
+    )) {
+        $resolvedLegacyPath = [IO.Path]::GetFullPath($legacyPath)
+        if (-not $resolvedLegacyPath.StartsWith($pluginsRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Invalid legacy plugin path'
+        }
+        if (Test-Path -LiteralPath $resolvedLegacyPath) {
+            Remove-Item -LiteralPath $resolvedLegacyPath -Recurse -Force
+        }
+    }
     $pluginBundle = Join-Path $package.Directory $package.File
     if (Test-Path -LiteralPath $pluginBundle) { Remove-Item -LiteralPath $pluginBundle -Force }
-    $pluginBuildOutput = Join-Path $root "plugins\$($package.Project)\bin\$Configuration\$windowsTargetFramework"
+    $pluginBuildOutput = Join-Path $package.ProjectDirectory "bin\$Configuration\$windowsTargetFramework"
     [IO.Compression.ZipFile]::CreateFromDirectory(
         $pluginBuildOutput,
         $pluginBundle,

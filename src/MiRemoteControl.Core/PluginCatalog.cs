@@ -116,6 +116,13 @@ public sealed class PluginCatalog : IDisposable
         var plugin = Activator.CreateInstance(type) as IHarnessPlugin
             ?? throw new InvalidDataException("Entry does not implement IHarnessPlugin.");
         if (plugin.Descriptor.Id != manifest.Id) { plugin.Dispose(); throw new InvalidDataException("Plugin ID mismatch."); }
+        if (!string.Equals(plugin.Descriptor.Name, manifest.Name, StringComparison.Ordinal) ||
+            !string.Equals(plugin.Descriptor.Version, manifest.Version, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(plugin.Descriptor.Kind, manifest.Kind, StringComparison.OrdinalIgnoreCase))
+        {
+            plugin.Dispose();
+            throw new InvalidDataException("Plugin manifest metadata does not match its descriptor.");
+        }
         if (!string.Equals(plugin.Descriptor.Kind, expectedKind, StringComparison.OrdinalIgnoreCase))
         {
             plugin.Dispose();
@@ -194,7 +201,7 @@ public sealed class PluginCatalog : IDisposable
         _sourcePaths.Clear();
     }
 
-    private sealed record Manifest(string Id, int ApiVersion, string EntryAssembly, string EntryType);
+    private sealed record Manifest(string Id, string Name, string Version, string Kind, int ApiVersion, string EntryAssembly, string EntryType);
 
     private sealed class PluginLoadContext(string entry) : AssemblyLoadContext
     {

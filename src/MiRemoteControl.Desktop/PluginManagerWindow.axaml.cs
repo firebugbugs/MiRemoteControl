@@ -12,14 +12,16 @@ namespace MiRemoteControl.Desktop;
 
 public partial class PluginManagerWindow : Window
 {
-    private const string PluginId = "mrc.zcode";
-    private const string ManifestUrl = "https://download.cheems.cn/v1/manifests/plugins/mrc.zcode/stable.json";
+    private static readonly MarketplaceSource[] Marketplace =
+    [
+        new("mrc.zcode", new Uri("https://download.cheems.cn/v1/manifests/plugins/mrc.zcode/stable.json"))
+    ];
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
 
     private readonly string _targetPluginDirectory;
     private readonly DispatcherTimer _timer;
-    private RemotePlugin? _remotePlugin;
-    private CloudBinding? _cloudBinding;
+    private readonly Dictionary<string, RemotePlugin> _remotePlugins = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CloudBinding> _cloudBindings = new(StringComparer.OrdinalIgnoreCase);
     private string _installedSignature = "";
 
     public PluginManagerWindow() : this(Path.Combine(AppContext.BaseDirectory, "plugins", "targets"))
@@ -38,101 +40,109 @@ public partial class PluginManagerWindow : Window
         Closed += (_, _) => _timer.Stop();
         RefreshLocalPlugins(force: true);
         ShowCloudMessage("正在读取插件更新信息…");
-        Opened += async (_, _) => await LoadRemotePluginAsync();
+        Opened += async (_, _) => await LoadRemotePluginsAsync();
     }
 
-    private async Task LoadRemotePluginAsync()
+    private async Task LoadRemotePluginsAsync()
     {
-        try
+        CloudPluginsPanel.Children.Clear();
+        _remotePlugins.Clear();
+        _cloudBindings.Clear();
+        var errors = new List<string>();
+        foreach (var source in Marketplace)
         {
-            using var response = await Http.GetAsync(ManifestUrl);
-            response.EnsureSuccessStatusCode();
-            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            var root = document.RootElement;
-            if (!root.TryGetProperty("available", out var available) || !available.GetBoolean())
+            try
             {
-                ShowCloudMessage("ZCode 当前暂无可用更新。", showRefresh: true);
-                return;
+                using var response = await Http.GetAsync(source.ManifestUrl);
+                response.EnsureSuccessStatusCode();
+                using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                var root = document.RootElement;
+                if (!root.TryGetProperty("available", out var available) || !available.GetBoolean()) continue;
+
+                var id = root.TryGetProperty("id", out var idValue) ? idValue.GetString() : null;
+                var name = root.TryGetProperty("name", out var nameValue) ? nameValue.GetString() : null;
+                var version = root.TryGetProperty("version", out var versionValue) ? versionValue.GetString() : null;
+                var urlText = root.TryGetProperty("downloadUrl", out var urlValue) ? urlValue.GetString() : null;
+                var size = root.TryGetProperty("sizeBytes", out var sizeValue) && sizeValue.TryGetInt64(out var bytes) ? bytes : 0;
+                var sha256 = root.TryGetProperty("sha256", out var hashValue) ? hashValue.GetString() : null;
+                if (!string.Equals(id, source.ExpectedId, StringComparison.OrdinalIgnoreCase) ||
+                    string.IsNullOrWhiteSpace(version) || string.IsNullOrWhiteSpace(name) ||
+                    !Uri.TryCreate(urlText, UriKind.Absolute, out var downloadUrl) ||
+                    downloadUrl.Scheme != Uri.UriSchemeHttps ||
+                    !downloadUrl.Host.Equals(source.ManifestUrl.Host, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("云端插件清单不完整。");
+
+                var remote = new RemotePlugin(id!, name!, version!, downloadUrl, size, sha256);
+                _remotePlugins[id!] = remote;
+                BuildCloudCard(remote);
             }
-
-            var id = root.TryGetProperty("id", out var idValue) ? idValue.GetString() : null;
-            var version = root.TryGetProperty("version", out var versionValue) ? versionValue.GetString() : null;
-            var urlText = root.TryGetProperty("downloadUrl", out var urlValue) ? urlValue.GetString() : null;
-            var size = root.TryGetProperty("sizeBytes", out var sizeValue) && sizeValue.TryGetInt64(out var bytes) ? bytes : 0;
-            var sha256 = root.TryGetProperty("sha256", out var hashValue) ? hashValue.GetString() : null;
-            if (!string.Equals(id, PluginId, StringComparison.OrdinalIgnoreCase) ||
-                string.IsNullOrWhiteSpace(version) ||
-                !Uri.TryCreate(urlText, UriKind.Absolute, out var downloadUrl) ||
-                downloadUrl.Scheme != Uri.UriSchemeHttps ||
-                !downloadUrl.Host.Equals("download.cheems.cn", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("云端插件清单不完整。");
-
-            _remotePlugin = new RemotePlugin(PluginId, "ZCode 控制", version!, downloadUrl, size, sha256);
-            BuildCloudCard(_remotePlugin);
+            catch (Exception exception) { errors.Add($"{source.ExpectedId}: {exception.Message}"); }
         }
-        catch (Exception exception)
-        {
-            ShowCloudMessage($"读取更新信息失败：{exception.Message}", showRefresh: true);
-        }
+        if (_remotePlugins.Count == 0)
+            ShowCloudMessage(errors.Count == 0 ? "当前暂无可用插件。" : $"读取更新信息失败：{string.Join("；", errors)}", showRefresh: true);
     }
 
     private void RefreshUi()
     {
         RefreshLocalPlugins(force: false);
-        if (_cloudBinding is not null) RefreshCloudBinding(_cloudBinding);
+        foreach (var binding in _cloudBindings.Values) RefreshCloudBinding(binding);
     }
 
     private void RefreshLocalPlugins(bool force)
     {
-        var installed = FindInstalledPlugin();
-        var signature = installed is null ? "none" : $"{installed.Path}|{installed.Version}|{File.GetLastWriteTimeUtc(installed.Path).Ticks}";
+        var installedPlugins = FindInstalledPlugins();
+        var signature = string.Join('|', installedPlugins.Select(installed =>
+            $"{installed.Path}:{installed.Id}:{installed.Version}:{File.GetLastWriteTimeUtc(installed.Path).Ticks}"));
         if (!force && string.Equals(signature, _installedSignature, StringComparison.Ordinal)) return;
         _installedSignature = signature;
         LocalPluginsPanel.Children.Clear();
 
-        if (installed is null)
+        if (installedPlugins.Count == 0)
         {
-            LocalPluginsPanel.Children.Add(new TextBlock { Text = "未安装 ZCode 插件", Foreground = Brush("Plugin.Muted") });
+            LocalPluginsPanel.Children.Add(new TextBlock { Text = "未安装目标端插件", Foreground = Brush("Plugin.Muted") });
             return;
         }
 
-        var remove = ActionButton();
-        remove.Content = "卸载";
-        remove.Click += async (_, _) =>
+        foreach (var installed in installedPlugins)
         {
-            if (!await ConfirmAsync("卸载插件", "确定卸载 ZCode 插件？\n当前已经加载的版本会在软件重启后移除。", "确认卸载")) return;
-            try
+            var remove = ActionButton();
+            remove.Content = "卸载";
+            remove.Click += async (_, _) =>
             {
-                var full = Path.GetFullPath(installed.Path);
-                if (!string.Equals(Directory.GetParent(full)?.FullName, _targetPluginDirectory, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("插件路径不安全。");
-                File.Delete(full);
-                if (_remotePlugin is not null) PersistentDownloadManager.Forget(CreateDescriptor(_remotePlugin));
-                _installedSignature = "";
-                RefreshLocalPlugins(force: true);
-                if (_cloudBinding is not null) RefreshCloudBinding(_cloudBinding);
-            }
-            catch (Exception exception)
-            {
-                await ShowNoticeAsync("卸载失败", exception.Message);
-            }
-        };
+                if (!await ConfirmAsync("卸载插件", $"确定卸载 {installed.Name}？\n当前已经加载的版本会在软件重启后移除。", "确认卸载")) return;
+                try
+                {
+                    var full = Path.GetFullPath(installed.Path);
+                    if (!string.Equals(Directory.GetParent(full)?.FullName, _targetPluginDirectory, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("插件路径不安全。");
+                    File.Delete(full);
+                    if (_remotePlugins.TryGetValue(installed.Id, out var remote))
+                        PersistentDownloadManager.Forget(CreateDescriptor(remote));
+                    _installedSignature = "";
+                    RefreshLocalPlugins(force: true);
+                    if (_cloudBindings.TryGetValue(installed.Id, out var binding)) RefreshCloudBinding(binding);
+                }
+                catch (Exception exception)
+                {
+                    await ShowNoticeAsync("卸载失败", exception.Message);
+                }
+            };
 
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("42,*,Auto") };
-        grid.Children.Add(PluginIcon());
-        var text = PluginText("ZCode 控制", $"目标端插件 · v{installed.Version}");
-        Grid.SetColumn(text, 1);
-        grid.Children.Add(text);
-        Grid.SetColumn(remove, 2);
-        grid.Children.Add(remove);
-        var card = Card();
-        card.Child = grid;
-        LocalPluginsPanel.Children.Add(card);
+            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("42,*,Auto") };
+            grid.Children.Add(PluginIcon(installed.Name));
+            var text = PluginText(installed.Name, $"{installed.Id} · v{installed.Version}");
+            Grid.SetColumn(text, 1);
+            grid.Children.Add(text);
+            Grid.SetColumn(remove, 2);
+            grid.Children.Add(remove);
+            var card = Card();
+            card.Child = grid;
+            LocalPluginsPanel.Children.Add(card);
+        }
     }
 
     private void BuildCloudCard(RemotePlugin remote)
     {
-        CloudPluginsPanel.Children.Clear();
         var descriptor = CreateDescriptor(remote);
         PersistentDownloadManager.GetOrRestore(descriptor);
         var binding = new CloudBinding(remote, descriptor)
@@ -157,7 +167,7 @@ public partial class PluginManagerWindow : Window
             }
         };
         ToolTip.SetTip(binding.Cancel, "停止下载并删除未完成的文件");
-        _cloudBinding = binding;
+        _cloudBindings[remote.Id] = binding;
 
         binding.Download.Click += (_, _) => PersistentDownloadManager.StartOrResume(descriptor);
         binding.Pause.Click += (_, _) =>
@@ -168,7 +178,7 @@ public partial class PluginManagerWindow : Window
         binding.Cancel.Click += async (_, _) => await CancelDownloadAsync(binding);
 
         var header = new Grid { ColumnDefinitions = new ColumnDefinitions("42,*,Auto,Auto,Auto") };
-        header.Children.Add(PluginIcon());
+        header.Children.Add(PluginIcon(remote.Name));
         var text = PluginText(remote.Name, $"云端稳定版 · v{remote.Version}{(remote.SizeBytes > 0 ? $" · {FormatSize(remote.SizeBytes)}" : "")}");
         Grid.SetColumn(text, 1);
         header.Children.Add(text);
@@ -211,10 +221,10 @@ public partial class PluginManagerWindow : Window
                         throw new InvalidDataException("插件包校验失败。");
                 }
 
-                ValidatePluginPackage(package, remote.Version);
+                ValidatePluginPackage(package, remote.Id, remote.Version);
                 cancellationToken.ThrowIfCancellationRequested();
                 Directory.CreateDirectory(_targetPluginDirectory);
-                var target = Path.Combine(_targetPluginDirectory, "mrc.zcode.mrcplugin");
+                var target = Path.Combine(_targetPluginDirectory, remote.Id + ".mrcplugin");
                 var staging = target + ".new";
                 try
                 {
@@ -229,7 +239,7 @@ public partial class PluginManagerWindow : Window
             });
     }
 
-    private static void ValidatePluginPackage(string packagePath, string expectedVersion)
+    private static void ValidatePluginPackage(string packagePath, string expectedId, string expectedVersion)
     {
         using var archive = ZipFile.OpenRead(packagePath);
         var manifests = archive.Entries.Where(entry =>
@@ -238,9 +248,9 @@ public partial class PluginManagerWindow : Window
         using var stream = manifests[0].Open();
         using var document = JsonDocument.Parse(stream);
         var root = document.RootElement;
-        if (!root.TryGetProperty("id", out var id) || !string.Equals(id.GetString(), PluginId, StringComparison.OrdinalIgnoreCase) ||
+        if (!root.TryGetProperty("id", out var id) || !string.Equals(id.GetString(), expectedId, StringComparison.OrdinalIgnoreCase) ||
             !root.TryGetProperty("apiVersion", out var apiVersion) || apiVersion.GetInt32() != 1)
-            throw new InvalidDataException("插件包与 ZCode 插件不匹配。");
+            throw new InvalidDataException("插件包与更新清单不匹配。");
         var version = root.TryGetProperty("version", out var versionValue) ? versionValue.GetString() : null;
         if (!string.Equals(version, expectedVersion, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("插件包版本与更新清单不一致。");
@@ -248,7 +258,8 @@ public partial class PluginManagerWindow : Window
 
     private void RefreshCloudBinding(CloudBinding binding)
     {
-        var installed = FindInstalledPlugin();
+        var installed = FindInstalledPlugins().FirstOrDefault(plugin =>
+            plugin.Id.Equals(binding.Remote.Id, StringComparison.OrdinalIgnoreCase));
         var job = PersistentDownloadManager.GetOrRestore(binding.Descriptor);
         if (job is null)
         {
@@ -313,26 +324,27 @@ public partial class PluginManagerWindow : Window
     {
         var job = PersistentDownloadManager.GetOrRestore(binding.Descriptor);
         if (job is null) return;
-        if (!await ConfirmAsync("取消下载", "确定取消 ZCode 插件下载？\n已经下载的临时文件会被删除。", "取消下载")) return;
+        if (!await ConfirmAsync("取消下载", $"确定取消 {binding.Remote.Name} 下载？\n已经下载的临时文件会被删除。", "取消下载")) return;
         await PersistentDownloadManager.CancelAsync(job);
         RefreshCloudBinding(binding);
     }
 
-    private InstalledPlugin? FindInstalledPlugin()
+    private IReadOnlyList<InstalledPlugin> FindInstalledPlugins()
     {
+        var plugins = new List<InstalledPlugin>();
         try
         {
-            if (!Directory.Exists(_targetPluginDirectory)) return null;
+            if (!Directory.Exists(_targetPluginDirectory)) return plugins;
             foreach (var file in Directory.EnumerateFiles(_targetPluginDirectory, "*", SearchOption.TopDirectoryOnly))
-                if (TryReadPlugin(file, out var version)) return new InstalledPlugin(file, version ?? "未知");
+                if (TryReadPlugin(file, out var plugin)) plugins.Add(plugin!);
         }
         catch { }
-        return null;
+        return plugins.OrderBy(plugin => plugin.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
     }
 
-    private static bool TryReadPlugin(string path, out string? version)
+    private static bool TryReadPlugin(string path, out InstalledPlugin? plugin)
     {
-        version = null;
+        plugin = null;
         try
         {
             using var archive = ZipFile.OpenRead(path);
@@ -342,8 +354,11 @@ public partial class PluginManagerWindow : Window
             using var stream = manifest.Open();
             using var document = JsonDocument.Parse(stream);
             var root = document.RootElement;
-            if (!root.TryGetProperty("id", out var id) || !string.Equals(id.GetString(), PluginId, StringComparison.OrdinalIgnoreCase)) return false;
-            version = root.TryGetProperty("version", out var value) ? value.GetString() : null;
+            var id = root.TryGetProperty("id", out var idValue) ? idValue.GetString() : null;
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            var name = root.TryGetProperty("name", out var nameValue) ? nameValue.GetString() : null;
+            var version = root.TryGetProperty("version", out var value) ? value.GetString() : null;
+            plugin = new InstalledPlugin(path, id, string.IsNullOrWhiteSpace(name) ? id : name, version ?? "未知");
             return true;
         }
         catch { return false; }
@@ -351,7 +366,7 @@ public partial class PluginManagerWindow : Window
 
     private void ShowCloudMessage(string message, bool showRefresh = false)
     {
-        _cloudBinding = null;
+        _cloudBindings.Clear();
         CloudPluginsPanel.Children.Clear();
         if (!showRefresh)
         {
@@ -364,7 +379,7 @@ public partial class PluginManagerWindow : Window
         refresh.Click += async (_, _) =>
         {
             refresh.IsEnabled = false;
-            await LoadRemotePluginAsync();
+            await LoadRemotePluginsAsync();
         };
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         grid.Children.Add(new TextBlock { Text = message, Foreground = Brush("Plugin.Muted"), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
@@ -384,13 +399,13 @@ public partial class PluginManagerWindow : Window
         return !string.Equals(remoteText, installedText, StringComparison.OrdinalIgnoreCase);
     }
 
-    private Border PluginIcon() => new()
+    private Border PluginIcon(string name) => new()
     {
         Width = 34,
         Height = 34,
         CornerRadius = new Avalonia.CornerRadius(9),
         Background = new SolidColorBrush(Color.Parse("#5A4BCB")),
-        Child = new TextBlock { Text = "Z", FontSize = 17, FontWeight = FontWeight.Bold, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+        Child = new TextBlock { Text = name.Trim().FirstOrDefault().ToString().ToUpperInvariant(), FontSize = 17, FontWeight = FontWeight.Bold, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
     };
 
     private StackPanel PluginText(string title, string subtitle)
@@ -455,8 +470,9 @@ public partial class PluginManagerWindow : Window
 
     private void CloseWindow(object? sender, RoutedEventArgs e) => Close();
 
-    private sealed record InstalledPlugin(string Path, string Version);
+    private sealed record InstalledPlugin(string Path, string Id, string Name, string Version);
     private sealed record RemotePlugin(string Id, string Name, string Version, Uri DownloadUrl, long SizeBytes, string? Sha256);
+    private sealed record MarketplaceSource(string ExpectedId, Uri ManifestUrl);
 
     private sealed class CloudBinding(RemotePlugin remote, DownloadDescriptor descriptor)
     {

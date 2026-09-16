@@ -6,26 +6,61 @@
         WindowDecorations="None"
         WindowState="FullScreen"
         CanResize="False"
-        ShowActivated="False"
-        Focusable="False"
+        ShowActivated="True"
+        Focusable="True"
         IsHitTestVisible="True"
         ShowInTaskbar="False"
         Topmost="True"
-        Background="#07090C"
-        PointerPressed="OnPointerPressed"
+        Background="#000000"
         KeyDown="OnKeyDown">
-    <Grid Background="#07090C">
-        <TextBlock Name="DisplayTextBlock"
-                   Margin="96,72"
-                   HorizontalAlignment="Stretch"
-                   VerticalAlignment="Center"
-                   Foreground="#F8FAFC"
-                   FontFamily="Inter, Microsoft YaHei UI"
-                   FontSize="140"
-                   FontWeight="SemiBold"
-                   LineHeight="170"
-                   Text="暂无输入内容"
-                   TextAlignment="Center"
-                   TextWrapping="Wrap"/>
+    <Window.Resources>
+        <!-- A standalone theme: Fluent's focused template paints its own white
+             border/background even when TextBox.Background is transparent. -->
+        <ControlTheme x:Key="BigScreenEditorTheme" TargetType="TextBox">
+            <Setter Property="FocusAdorner" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <ScrollViewer Name="PART_ScrollViewer"
+                                  Background="Transparent"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Hidden">
+                        <TextPresenter Name="PART_TextPresenter"
+                                       Text="{TemplateBinding Text, Mode=TwoWay}"
+                                       CaretBrush="{TemplateBinding CaretBrush}"
+                                       CaretBlinkInterval="{TemplateBinding CaretBlinkInterval}"
+                                       CaretIndex="{TemplateBinding CaretIndex}"
+                                       SelectionStart="{TemplateBinding SelectionStart}"
+                                       SelectionEnd="{TemplateBinding SelectionEnd}"
+                                       SelectionBrush="{TemplateBinding SelectionBrush}"
+                                       SelectionForegroundBrush="{TemplateBinding SelectionForegroundBrush}"
+                                       TextAlignment="{TemplateBinding TextAlignment}"
+                                       TextWrapping="{TemplateBinding TextWrapping}"
+                                       HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                       VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                    </ScrollViewer>
+                </ControlTemplate>
+            </Setter>
+        </ControlTheme>
+    </Window.Resources>
+    <Grid Background="#000000">
+        <TextBox Name="EditorTextBox"
+                 Theme="{StaticResource BigScreenEditorTheme}"
+                 Margin="96,72"
+                 HorizontalAlignment="Stretch"
+                 VerticalAlignment="Stretch"
+                 HorizontalContentAlignment="Stretch"
+                 VerticalContentAlignment="Center"
+                 Foreground="#FFFFFF"
+                 Background="Transparent"
+                 BorderThickness="0"
+                 FontFamily="Inter, Microsoft YaHei UI"
+                 FontSize="140"
+                 FontWeight="SemiBold"
+                 TextAlignment="Center"
+                 TextWrapping="Wrap"
+                 AcceptsReturn="True"
+                 IsReadOnly="False"
+                 CaretBrush="#FFFFFF"
+                 SelectionBrush="#365F9E"/>
     </Grid>
 </Window>

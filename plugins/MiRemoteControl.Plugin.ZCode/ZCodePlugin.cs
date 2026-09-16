@@ -1,28 +1,37 @@
 using System.Diagnostics;
 using System.Windows.Automation;
+using System.Windows.Automation.Text;
 using MiRemoteControl.Contracts;
 
 namespace MiRemoteControl.Plugin.ZCode;
 
-public sealed class ZCodePlugin : IHarnessPlugin
+public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
 {
     private static readonly string[] ComposerNames = ["向 ZCode 提问", "提出后续修改要求", "继续输入以排队后续修改", "Ask ZCode anything", "Ask for follow-up changes", "Keep typing to queue follow-up changes"];
     private static readonly string[] ConfirmationHints = ["使用 Tab / 上下键选择", "Use Tab / arrow keys to choose"];
     private readonly object _inputProbeSync = new();
     private string? _lastProbedText;
+    private int? _lastProbedCaretIndex;
     private string? _lastVerifiedInputText;
     private string _lastVerifiedInputSource = "write-verification";
     private readonly HashSet<ulong> _supersededProbeHashes = [];
     private long _inputProbeRevision;
     private int _inputWriteInProgress;
-    public PluginDescriptor Descriptor { get; } = new("mrc.zcode", "ZCode 控制", "0.2.4", [
+    private CancellationTokenSource? _inputWatcherCancellation;
+    private Task? _inputWatcherTask;
+    private TaskCompletionSource<long> _inputChanged = NewInputChangedSignal();
+    public PluginDescriptor Descriptor { get; } = new("mrc.zcode", "ZCode 控制", "0.3.1", [
         new("open", "打开", "启动或恢复 ZCode 并显示在前台"),
         new("close", "关闭窗口", "相当于右上角关闭，不强杀进程"),
         new("input", "输入内容", "向当前页面输入框追加文本；replace=true 替换"),
+        new(TargetPluginActions.InputFocus, "聚焦输入框", "聚焦当前页面输入框但不修改内容"),
+        new(TargetPluginActions.InputWatch, "监听输入", "输入框文本变化时返回完整文本快照"),
+        new(TargetPluginActions.InputReplace, "覆盖输入", "清空输入框后写入完整文本；空文本表示全部删除"),
+        new(TargetPluginActions.InputEdit, "光标编辑", "在当前光标位置插入文本或向前/向后删除"),
         new("input.read", "读取输入", "读取当前输入框中的完整文本"),
         new(TargetPluginActions.InputProbe, "输入探针", "读取实际输入框内容及单调递增的内容版本"),
-        new("input.remove-tv-artifact", "清理电视键输入", "仅删除输入框末尾由电视键产生的字符"),
         new("backspace", "删除字符", "删除当前输入框光标前的一个字符"),
+        new(TargetPluginActions.CursorMove, "移动光标", "按方向移动当前输入框的光标；direction=up/down/left/right"),
         new("send", "发送", "点击当前页面发送按钮"),
         new("stop", "停止任务", "点击当前页面停止生成按钮"),
         new("confirm.up", "上一个选项", "在当前确认卡片向上切换"),
@@ -33,19 +42,32 @@ public sealed class ZCodePlugin : IHarnessPlugin
         new("status", "状态", "读取可见窗口及当前可用操作"),
         new("inspect", "诊断", "读取可见 UIA 控件，可能包含页面文本")
     ], PluginKinds.Target);
-    public CommandResult Execute(string action, IReadOnlyDictionary<string,string> arguments)
+
+    public async Task<CommandResult> ExecuteAsync(
+        string action,
+        IReadOnlyDictionary<string, string> arguments,
+        CancellationToken ct)
+    {
+        if (action == TargetPluginActions.InputWatch)
+            return await WatchInputAsync(arguments, ct);
+        return await Task.Run(() => Execute(action, arguments), ct);
+    }
+
+    public CommandResult Execute(string action, IReadOnlyDictionary<string, string> arguments)
     {
         try
         {
             if (!Descriptor.Actions.Any(a => a.Id == action)) return CommandResult.Fail("UnknownAction", "未知 ZCode 操作。");
             foreach (var key in arguments.Keys)
-                if (key is not ("exe" or "window" or "text" or "replace"))
+                if (key is not ("exe" or "window" or "text" or "replace" or "direction" or "delete" or "afterRevision" or "timeoutMs"))
                     return CommandResult.Fail("InvalidArgument", $"未知参数：{key}");
+            if (action == TargetPluginActions.InputWatch)
+                return CommandResult.Fail("AsyncRequired", "input.watch 必须通过异步插件接口调用。");
             var exe = ResolveExecutable(arguments);
             var windows = NativeWindow.Find(exe);
             if (action == "open") return Open(exe, windows, arguments);
             if (action == "status" && windows.Count == 0)
-                return CommandResult.Ok("ZCode 未打开", new { running = false, focused = false, windows });
+                return CommandResult.Ok("ZCode 未打开", new TargetPluginStatus(false, false, Details: new { windows }));
             // Several ZCode windows may coexist while the remote's fullscreen
             // mirror or the studio window owns the foreground, so composer
             // actions must not depend on foreground disambiguation. Pick the
@@ -79,29 +101,28 @@ public sealed class ZCodePlugin : IHarnessPlugin
                 var composer = FindComposerFast(root);
                 if (composer is null)
                     return CommandResult.Fail("InputProbeUnavailable", "当前页面没有可探测的输入框。");
-                return PublishInputProbe(ReadProbeText(composer));
+                var text = ReadProbeText(composer);
+                return PublishInputProbe(text, caretIndex: ReadCaretIndex(composer, text));
             }
-            if (action == "input.remove-tv-artifact")
+            if (action == TargetPluginActions.InputFocus)
             {
                 var composer = FindComposerFast(root);
                 if (composer is null)
-                    return CommandResult.Fail("ComposerNotFound", "当前页面没有可读取的输入框。");
-                var text = ReadText(composer) ?? string.Empty;
-                if (text.Length == 0 || text[^1] is not ('`' or '·'))
-                    return CommandResult.Ok("输入框末尾没有电视键残留字符。", new { removed = false, text });
-
-                NativeWindow.Focus(target);
-                composer.SetFocus();
-                Thread.Sleep(30);
-                NativeWindow.Key(target, 0x23, 0x11); // Ctrl+End
-                NativeWindow.Key(target, 0x08);       // Backspace
-                Thread.Sleep(50);
-                var cleaned = ReadText(composer) ?? string.Empty;
-                var expected = text[..^1];
-                if (Normalize(cleaned) != Normalize(expected))
-                    return CommandResult.Fail("TvArtifactCleanupUnverified", "已尝试清理电视键字符，但输入框回读结果不一致。");
-                PublishInputProbe(cleaned, authoritative: true, sourceOverride: "artifact-cleanup");
-                return CommandResult.Ok("已清理电视键残留字符。", new { removed = true, text = cleaned });
+                    return CommandResult.Fail("ComposerNotFound", "当前页面没有可聚焦的输入框。");
+                FocusComposerStable(target, composer, 2);
+                return CommandResult.Ok("输入框已聚焦。", new { state = "Focused" });
+            }
+            if (action == TargetPluginActions.InputReplace)
+            {
+                BeginInputWrite();
+                try { return ReplaceInput(target, root, arguments); }
+                finally { EndInputWrite(); }
+            }
+            if (action == TargetPluginActions.InputEdit)
+            {
+                BeginInputWrite();
+                try { return EditInputAtCaret(target, root, arguments); }
+                finally { EndInputWrite(); }
             }
             if (action == "backspace")
             {
@@ -109,19 +130,31 @@ public sealed class ZCodePlugin : IHarnessPlugin
                 // its deterministic baseline. Chromium does perform the edit
                 // while occluded, but its UIA tree keeps exposing the longer
                 // pre-delete value until the fullscreen mirror closes.
-                var before = ReadCachedProbeText();
+                var (before, caretIndex) = ReadCachedProbe();
                 if (before is null)
                 {
                     var composer = FindComposerFast(root);
                     if (composer is null)
                         return CommandResult.Fail("ComposerNotFound", "当前页面没有可读取的输入框。");
                     before = ReadProbeText(composer);
+                    caretIndex = ReadCaretIndex(composer, before);
                 }
                 if (!NativeWindow.IsForeground(target)) NativeWindow.Focus(target);
                 NativeWindow.Key(target, 0x08);
-                var expected = RemoveLastTextElement(before);
-                PublishInputProbe(expected, authoritative: true, sourceOverride: "backspace-dispatch");
+                var expected = RemoveTextElementBefore(before, caretIndex ?? before.Length, out var expectedCaret);
+                PublishInputProbe(expected, authoritative: true, sourceOverride: "backspace-dispatch", caretIndex: expectedCaret);
                 return CommandResult.Ok("已删除输入框中的一个字符。", new { state = "Dispatched", text = expected });
+            }
+            if (action == TargetPluginActions.CursorMove)
+            {
+                if (!arguments.TryGetValue("direction", out var direction) || !TryGetCursorKey(direction, out var key))
+                    return CommandResult.Fail("InvalidArgument", "cursor.move 需要 direction=up/down/left/right。");
+                var composer = FindComposerFast(root);
+                if (composer is null)
+                    return CommandResult.Fail("ComposerNotFound", "当前页面没有可控制的输入框。");
+                FocusComposerStable(target, composer, 1);
+                NativeWindow.Key(target, key);
+                return CommandResult.Ok("已移动输入框光标。", new { direction = direction.ToLowerInvariant() });
             }
             if (action == "input")
             {
@@ -146,16 +179,17 @@ public sealed class ZCodePlugin : IHarnessPlugin
                 Thread.Sleep(100);
             }
             if (action == "inspect") return CommandResult.Ok("UIA 诊断", elements.Select(Summarize).ToArray());
-            if (action == "status") return CommandResult.Ok("ZCode 窗口已连接", new
-            {
-                running = true,
-                focused = windows.Any(NativeWindow.IsForeground),
-                windows = windows.Select(w => new { handle = w.Handle.ToInt64(), w.ProcessId, w.Title }),
-                composer = FindComposer(elements, false) is not null,
-                canSend = Buttons(elements, ["发送", "Send", "加入队列", "Queue"]).Any(e => e.Cached.IsEnabled),
-                canStop = Buttons(elements, ["停止生成", "Stop"]).Any(e => e.Cached.IsEnabled),
-                confirmation = FindConfirmation(elements) is not null
-            });
+            if (action == "status") return CommandResult.Ok("ZCode 窗口已连接", new TargetPluginStatus(
+                Running: true,
+                Focused: windows.Any(NativeWindow.IsForeground),
+                CanSend: Buttons(elements, ["发送", "Send", "加入队列", "Queue"]).Any(e => e.Cached.IsEnabled),
+                CanStop: Buttons(elements, ["停止生成", "Stop"]).Any(e => e.Cached.IsEnabled),
+                Details: new
+                {
+                    windows = windows.Select(w => new { handle = w.Handle.ToInt64(), w.ProcessId, w.Title }),
+                    composer = FindComposer(elements, false) is not null,
+                    confirmation = FindConfirmation(elements) is not null
+                }));
             NativeWindow.Focus(target);
             if (action.StartsWith("confirm.", StringComparison.Ordinal)) return Confirm(action, target, elements);
             if (action != "stop" && action != "backspace" && FindConfirmation(elements) is not null)
@@ -176,7 +210,20 @@ public sealed class ZCodePlugin : IHarnessPlugin
         catch (ElementNotAvailableException) { return CommandResult.Fail("TargetChanged", "页面控件已变化，请重新读取状态。"); }
         catch (Exception e) { return CommandResult.Fail("AutomationFailed", e.Message); }
     }
-    private static string ResolveExecutable(IReadOnlyDictionary<string,string> args)
+    private static bool TryGetCursorKey(string direction, out ushort key)
+    {
+        key = direction.Trim().ToLowerInvariant() switch
+        {
+            "up" => 0x26,
+            "down" => 0x28,
+            "left" => 0x25,
+            "right" => 0x27,
+            _ => 0
+        };
+        return key != 0;
+    }
+
+    private static string ResolveExecutable(IReadOnlyDictionary<string, string> args)
     {
         var candidates = args.TryGetValue("exe", out var path) ? new[] { Path.GetFullPath(path) } : new[] {
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "ZCode", "ZCode.exe"),
@@ -184,7 +231,7 @@ public sealed class ZCodePlugin : IHarnessPlugin
         };
         return candidates.FirstOrDefault(File.Exists) ?? throw new ControlException("AppNotInstalled", "未找到 ZCode.exe，请使用 --exe 指定安装路径。");
     }
-    private static CommandResult Open(string exe, List<WindowTarget> windows, IReadOnlyDictionary<string,string> args)
+    private static CommandResult Open(string exe, List<WindowTarget> windows, IReadOnlyDictionary<string, string> args)
     {
         if (windows.Count == 0)
         {
@@ -209,7 +256,7 @@ public sealed class ZCodePlugin : IHarnessPlugin
                     windows = NativeWindow.Find(exe);
                 }
                 var candidate = NativeWindow.Select(windows, args);
-                NativeWindow.Focus(candidate);
+                NativeWindow.Focus(candidate, promoteToTopmost: true);
                 Thread.Sleep(200); // let Electron settle, then confirm it kept the foreground
                 activated = candidate;
             }
@@ -219,7 +266,7 @@ public sealed class ZCodePlugin : IHarnessPlugin
             return CommandResult.Ok("ZCode 已在前台显示。", new { handle = activated.Handle.ToInt64(), activated.ProcessId });
         throw failure ?? new ControlException("FocusDenied", "Windows 未允许切到 ZCode 前台。");
     }
-    private CommandResult Input(WindowTarget target, AutomationElement composer, IReadOnlyDictionary<string,string> args)
+    private CommandResult Input(WindowTarget target, AutomationElement composer, IReadOnlyDictionary<string, string> args)
     {
         if (!args.TryGetValue("text", out var text)) throw new ControlException("InvalidArgument", "input 需要 --text 或 --file。");
         if (text.Length > 20000 || text.Any(c => char.IsControl(c) && c is not ('\n' or '\r')))
@@ -253,21 +300,17 @@ public sealed class ZCodePlugin : IHarnessPlugin
                 FocusComposerStable(target, composer, initiallyEmpty ? 4 : 2);
             }
         }
+        Thread.Sleep(30); // allow Ctrl key-up before Unicode input checks modifiers
         if (replace && text.Length == 0) NativeWindow.Key(target, 0x08);
         else
         {
-            try { NativeWindow.Text(target, text, CheckFocus); }
-            catch (ControlException exception) when (
-                exception.Code == "TargetChanged" &&
-                initiallyEmpty && text.Length <= 32 && !text.Contains('\n') && !text.Contains('\r'))
+            try
             {
-                // A short first utterance is one atomic SendInput chunk. If
-                // Text reports TargetChanged, it failed before that sole chunk
-                // was sent, so one focus recovery retry cannot duplicate text.
-                FocusComposerStable(target, composer, 4);
-                NativeWindow.Key(target, 0x23, 0x11); // Ctrl+End
-                NativeWindow.Text(target, text, CheckFocus);
+                if (text.Length > 0 && (replace || initiallyEmpty))
+                    NativeWindow.PasteText(target, text, CheckFocus);
+                else NativeWindow.Text(target, text, CheckFocus);
             }
+            catch (ControlException) { throw; }
         }
         var normalized = Normalize(text);
         var expected = replace ? text : before + text;
@@ -310,6 +353,186 @@ public sealed class ZCodePlugin : IHarnessPlugin
         PublishInputProbe(actual!, authoritative: true);
         return CommandResult.Ok("内容已输入并回读核验，尚未发送。", new { characters = text.Length, verified });
     }
+
+    private CommandResult ReplaceInput(
+        WindowTarget target,
+        AutomationElement root,
+        IReadOnlyDictionary<string, string> args)
+    {
+        if (!args.TryGetValue("text", out var text))
+            return CommandResult.Fail("InvalidArgument", "input.replace 需要 text；传入空字符串会清空输入框。");
+        if (text.Length > 20000 || text.Any(c => char.IsControl(c) && c is not ('\n' or '\r' or '\t')))
+            return CommandResult.Fail("InvalidText", "文本上限 20000 字符，且不允许制表、换行以外的控制字符。");
+
+        var composer = FindComposerFast(root);
+        if (composer is null)
+            return CommandResult.Fail("ComposerNotFound", "当前页面没有可覆盖写入的输入框。");
+
+        var write = Input(target, composer, new Dictionary<string, string>
+        {
+            ["text"] = text,
+            ["replace"] = "true"
+        });
+        if (!write.Success) return write;
+        lock (_inputProbeSync)
+        {
+            var snapshot = new InputProbeSnapshot(
+                true,
+                _lastProbedText ?? text,
+                _inputProbeRevision,
+                DateTimeOffset.UtcNow,
+                "replace",
+                _lastProbedCaretIndex ?? text.Length);
+            return CommandResult.Ok("已覆盖输入框的完整内容。", snapshot);
+        }
+    }
+
+    private CommandResult EditInputAtCaret(
+        WindowTarget target,
+        AutomationElement root,
+        IReadOnlyDictionary<string, string> args)
+    {
+        var text = args.TryGetValue("text", out var value) ? value : string.Empty;
+        var delete = args.TryGetValue("delete", out var deleteValue)
+            ? deleteValue.Trim().ToLowerInvariant()
+            : "none";
+        if (delete is not ("none" or "backward" or "forward"))
+            return CommandResult.Fail("InvalidArgument", "input.edit 的 delete 只能是 none、backward 或 forward。");
+        if (text.Length == 0 && delete == "none")
+            return CommandResult.Fail("InvalidArgument", "input.edit 至少需要 text，或指定 delete=backward/forward。");
+        if (text.Length > 20000 || text.Any(c => char.IsControl(c) && c is not ('\n' or '\r' or '\t')))
+            return CommandResult.Fail("InvalidText", "文本上限 20000 字符，且不允许制表、换行以外的控制字符。");
+
+        var composer = FindComposerFast(root);
+        if (composer is null)
+            return CommandResult.Fail("ComposerNotFound", "当前页面没有可编辑的输入框。");
+        FocusComposerStable(target, composer, 1);
+        void CheckFocus()
+        {
+            if (!Automation.Compare(AutomationElement.FocusedElement, composer))
+                throw new ControlException("EditorFocusLost", "输入框焦点已改变，停止编辑。");
+        }
+
+        if (delete == "backward") NativeWindow.Key(target, 0x08);
+        else if (delete == "forward") NativeWindow.Key(target, 0x2E);
+        if (text.Length > 0) NativeWindow.Text(target, text, CheckFocus);
+
+        string actual = string.Empty;
+        for (var attempt = 0; attempt < 6; attempt++)
+        {
+            Thread.Sleep(attempt == 0 ? 100 : 50);
+            CheckFocus();
+            actual = ReadProbeText(composer);
+            if (attempt > 0 || text.Length == 0 || actual.Contains(text, StringComparison.Ordinal)) break;
+        }
+        var result = PublishInputProbe(actual, authoritative: true, sourceOverride: "caret-edit",
+            caretIndex: ReadCaretIndex(composer, actual));
+        return CommandResult.Ok("已在当前光标位置完成编辑。", result.Data);
+    }
+
+    private async Task<CommandResult> WatchInputAsync(
+        IReadOnlyDictionary<string, string> args,
+        CancellationToken ct)
+    {
+        foreach (var key in args.Keys)
+            if (key is not ("exe" or "window" or "afterRevision" or "timeoutMs"))
+                return CommandResult.Fail("InvalidArgument", $"未知参数：{key}");
+        if (args.TryGetValue("afterRevision", out var revisionValue) &&
+            !long.TryParse(revisionValue, out _))
+            return CommandResult.Fail("InvalidArgument", "afterRevision 必须是整数。");
+        var afterRevision = args.TryGetValue("afterRevision", out revisionValue)
+            ? long.Parse(revisionValue)
+            : -1;
+        var timeoutMs = 20000;
+        if (args.TryGetValue("timeoutMs", out var timeoutValue) &&
+            (!int.TryParse(timeoutValue, out timeoutMs) || timeoutMs is < 100 or > 30000))
+            return CommandResult.Fail("InvalidArgument", "timeoutMs 必须在 100 到 30000 之间。");
+
+        EnsureInputWatcherStarted(args);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(timeoutMs);
+        while (true)
+        {
+            Task<long> changed;
+            lock (_inputProbeSync)
+            {
+                if (_lastProbedText is not null && _inputProbeRevision > afterRevision)
+                    return CurrentProbeResult("输入框文本已更新。");
+                changed = _inputChanged.Task;
+            }
+            try { await changed.WaitAsync(timeout.Token); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                lock (_inputProbeSync)
+                    return _lastProbedText is null
+                        ? CommandResult.Fail("InputProbeUnavailable", "当前页面没有可监听的输入框。")
+                        : CurrentProbeResult("输入框内容没有变化。");
+            }
+        }
+    }
+
+    private void EnsureInputWatcherStarted(IReadOnlyDictionary<string, string> args)
+    {
+        lock (_inputProbeSync)
+        {
+            if (_inputWatcherTask is { IsCompleted: false }) return;
+            _inputWatcherCancellation?.Dispose();
+            _inputWatcherCancellation = new CancellationTokenSource();
+            var options = args
+                .Where(pair => pair.Key is "exe" or "window")
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+            _inputWatcherTask = Task.Run(() => RunInputWatcherAsync(options, _inputWatcherCancellation.Token));
+        }
+    }
+
+    private async Task RunInputWatcherAsync(
+        IReadOnlyDictionary<string, string> args,
+        CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            var canRead = false;
+            lock (_inputProbeSync) canRead = _inputWriteInProgress == 0;
+            if (canRead)
+            {
+                try
+                {
+                    var exe = ResolveExecutable(args);
+                    var windows = NativeWindow.Find(exe);
+                    var target = SelectComposerWindow(windows, args);
+                    var composer = FindComposerFast(AutomationElement.FromHandle(target.Handle));
+                    if (composer is not null)
+                    {
+                        var text = ReadProbeText(composer);
+                        PublishInputProbe(text, caretIndex: ReadCaretIndex(composer, text));
+                    }
+                }
+                catch
+                {
+                    // The observer remains alive while ZCode starts, closes,
+                    // or replaces its Electron window. The next sample retries.
+                }
+            }
+            try { await Task.Delay(80, ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+        }
+    }
+
+    private CommandResult CurrentProbeResult(string message)
+    {
+        var snapshot = new InputProbeSnapshot(
+            true,
+            _lastProbedText ?? string.Empty,
+            _inputProbeRevision,
+            DateTimeOffset.UtcNow,
+            "watch",
+            _lastProbedCaretIndex);
+        return CommandResult.Ok(message, snapshot);
+    }
+
+    private static TaskCompletionSource<long> NewInputChangedSignal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     private static void FocusComposerStable(WindowTarget target, AutomationElement composer, int stableSamples)
     {
         for (var attempt = 0; attempt < 4; attempt++)
@@ -341,9 +564,51 @@ public sealed class ZCodePlugin : IHarnessPlugin
         if (text.EndsWith("\r\n", StringComparison.Ordinal)) return text[..^2];
         return text.EndsWith('\n') || text.EndsWith('\r') ? text[..^1] : text;
     }
-    private CommandResult PublishInputProbe(string text, bool authoritative = false, string? sourceOverride = null)
+
+    private static int? ReadCaretIndex(AutomationElement composer, string text)
+    {
+        try
+        {
+            if (!composer.TryGetCurrentPattern(TextPattern.Pattern, out var patternObject)) return null;
+            var pattern = (TextPattern)patternObject;
+            var selection = pattern.GetSelection();
+            if (selection.Length == 0) return null;
+            var document = pattern.DocumentRange;
+            if (selection[0].CompareEndpoints(
+                    TextPatternRangeEndpoint.End,
+                    document,
+                    TextPatternRangeEndpoint.End) == 0)
+                return text.Length;
+
+            // Build a temporary range from the start of the document to the
+            // active selection end. Its text length is the UTF-16 index used
+            // by the mirror and by string insertion.
+            var prefix = document.Clone();
+            prefix.MoveEndpointByRange(
+                TextPatternRangeEndpoint.End,
+                selection[0],
+                TextPatternRangeEndpoint.End);
+            var prefixText = prefix.GetText(-1)
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace('\r', '\n');
+            return Math.Clamp(prefixText.Length, 0, text.Length);
+        }
+        catch
+        {
+            // Caret metadata is optional. A provider-specific selection error
+            // must never suppress an otherwise valid text snapshot.
+            return null;
+        }
+    }
+
+    private CommandResult PublishInputProbe(
+        string text,
+        bool authoritative = false,
+        string? sourceOverride = null,
+        int? caretIndex = null)
     {
         InputProbeSnapshot snapshot;
+        TaskCompletionSource<long>? changedSignal = null;
         lock (_inputProbeSync)
         {
             var source = "uia";
@@ -355,6 +620,7 @@ public sealed class ZCodePlugin : IHarnessPlugin
                 _lastVerifiedInputText = text;
                 source = sourceOverride ?? "write-verification";
                 _lastVerifiedInputSource = source;
+                caretIndex ??= text.Length;
             }
             else if (_lastVerifiedInputText is { } verified)
             {
@@ -371,6 +637,7 @@ public sealed class ZCodePlugin : IHarnessPlugin
                     // comparing by length/prefix would break deletions.
                     text = verified;
                     source = _lastVerifiedInputSource;
+                    caretIndex = _lastProbedCaretIndex ?? verified.Length;
                 }
                 else
                 {
@@ -380,13 +647,18 @@ public sealed class ZCodePlugin : IHarnessPlugin
                     _supersededProbeHashes.Clear();
                 }
             }
+            int? normalizedCaret = caretIndex is null ? null : Math.Clamp(caretIndex.Value, 0, text.Length);
             if (!string.Equals(_lastProbedText, text, StringComparison.Ordinal))
             {
                 _lastProbedText = text;
                 _inputProbeRevision++;
+                changedSignal = _inputChanged;
+                _inputChanged = NewInputChangedSignal();
             }
-            snapshot = new(true, text, _inputProbeRevision, DateTimeOffset.UtcNow, source);
+            _lastProbedCaretIndex = normalizedCaret;
+            snapshot = new(true, text, _inputProbeRevision, DateTimeOffset.UtcNow, source, _lastProbedCaretIndex);
         }
+        changedSignal?.TrySetResult(snapshot.Revision);
         return CommandResult.Ok("输入探针已采样。", snapshot);
     }
     private void BeginInputWrite()
@@ -412,20 +684,27 @@ public sealed class ZCodePlugin : IHarnessPlugin
                 return true;
             }
             var snapshot = new InputProbeSnapshot(
-                true, _lastProbedText, _inputProbeRevision, DateTimeOffset.UtcNow, "write-in-progress");
+                true, _lastProbedText, _inputProbeRevision, DateTimeOffset.UtcNow, "write-in-progress", _lastProbedCaretIndex);
             result = CommandResult.Ok("输入框正在写入，返回最近一次完整快照。", snapshot);
             return true;
         }
     }
-    private string? ReadCachedProbeText()
+    private (string? Text, int? CaretIndex) ReadCachedProbe()
     {
-        lock (_inputProbeSync) return _lastProbedText;
+        lock (_inputProbeSync) return (_lastProbedText, _lastProbedCaretIndex);
     }
-    private static string RemoveLastTextElement(string text)
+    private static string RemoveTextElementBefore(string text, int caretIndex, out int newCaretIndex)
     {
-        if (text.Length == 0) return text;
+        caretIndex = Math.Clamp(caretIndex, 0, text.Length);
+        if (text.Length == 0 || caretIndex == 0)
+        {
+            newCaretIndex = caretIndex;
+            return text;
+        }
         var starts = System.Globalization.StringInfo.ParseCombiningCharacters(text);
-        return starts.Length == 0 ? string.Empty : text[..starts[^1]];
+        var start = starts.LastOrDefault(value => value < caretIndex);
+        newCaretIndex = start;
+        return text.Remove(start, caretIndex - start);
     }
     private static ulong ProbeFingerprint(string text)
     {
@@ -446,7 +725,7 @@ public sealed class ZCodePlugin : IHarnessPlugin
     // steady-state read/write path then resolves with a single UIA lookup
     // instead of probing every ZCode window each poll.
     private static nint _composerWindow;
-    private static WindowTarget SelectComposerWindow(List<WindowTarget> windows, IReadOnlyDictionary<string,string> args)
+    private static WindowTarget SelectComposerWindow(List<WindowTarget> windows, IReadOnlyDictionary<string, string> args)
     {
         var cached = windows.FirstOrDefault(w => w.Handle == _composerWindow);
         if (cached is not null && FindComposerFast(AutomationElement.FromHandle(cached.Handle)) is not null)
@@ -467,11 +746,15 @@ public sealed class ZCodePlugin : IHarnessPlugin
     }
     private static string? ReadText(AutomationElement element)
     {
-        // ZCode's Electron contenteditable exposes the freshly rendered draft
-        // through descendant Text nodes immediately, while the enclosing
-        // TextPattern.DocumentRange is refreshed one edit later whenever the
-        // fullscreen window owns the foreground. Prefer the rendered nodes so
-        // probes and post-write verification observe the same current frame.
+        // Chromium exposes the composer through ValuePattern even while it is
+        // fully covered by the non-activating TV mirror. This is the closest
+        // representation of the actual editable value and does not concatenate
+        // provider-owned descendant labels.
+        if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var value))
+            return ((ValuePattern)value).Current.Value;
+
+        // Fall back to rendered text nodes for older Electron accessibility
+        // providers where ValuePattern is unavailable.
         var rendered = element.FindAll(
                 TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text))
@@ -480,7 +763,6 @@ public sealed class ZCodePlugin : IHarnessPlugin
             .Where(value => !string.IsNullOrEmpty(value))
             .ToArray();
         if (rendered.Length > 0) return string.Concat(rendered);
-        if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var value)) return ((ValuePattern)value).Current.Value;
         if (element.TryGetCurrentPattern(TextPattern.Pattern, out var text)) return ((TextPattern)text).DocumentRange.GetText(-1);
         return null;
     }
@@ -492,27 +774,32 @@ public sealed class ZCodePlugin : IHarnessPlugin
         if (required) throw new ControlException(found.Length == 0 ? "ComposerNotFound" : "AmbiguousComposer", "当前页面无法唯一定位 ZCode 输入框。");
         return null;
     }
-    // Same matching rules as FindComposer, but pushes the ControlType/IsOffscreen
-    // filtering down to the provider so a poll never materializes the whole tree.
+    // The fullscreen TV mirror can make Chromium report the composer as
+    // offscreen even though it remains the focused editing control. Never use
+    // IsOffscreen as a hard filter here. Prefer the focused match, then the
+    // visible match, and finally the largest matching edit when Electron keeps
+    // stale hidden editors in its accessibility tree.
     private static AutomationElement? FindComposerFast(AutomationElement root)
     {
         var cache = new CacheRequest();
         cache.Add(AutomationElement.NameProperty);
         cache.Add(AutomationElement.IsEnabledProperty);
+        cache.Add(AutomationElement.IsOffscreenProperty);
+        cache.Add(AutomationElement.HasKeyboardFocusProperty);
+        cache.Add(AutomationElement.BoundingRectangleProperty);
         using (cache.Activate())
         {
-            AutomationElement? match = null;
-            var edits = root.FindAll(TreeScope.Descendants, new AndCondition(
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit),
-                new PropertyCondition(AutomationElement.IsOffscreenProperty, false)));
-            foreach (AutomationElement candidate in edits)
-            {
-                if (!candidate.Cached.IsEnabled ||
-                    !ComposerNames.Any(name => candidate.Cached.Name.StartsWith(name, StringComparison.OrdinalIgnoreCase))) continue;
-                if (match is not null) return null;
-                match = candidate;
-            }
-            return match;
+            var matches = root.FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit))
+                .Cast<AutomationElement>()
+                .Where(candidate => candidate.Cached.IsEnabled &&
+                    ComposerNames.Any(name => candidate.Cached.Name.StartsWith(name, StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+            if (matches.Length == 0) return null;
+            return matches.FirstOrDefault(candidate => candidate.Cached.HasKeyboardFocus)
+                ?? matches.FirstOrDefault(candidate => !candidate.Cached.IsOffscreen)
+                ?? matches.OrderByDescending(candidate =>
+                    candidate.Cached.BoundingRectangle.Width * candidate.Cached.BoundingRectangle.Height).First();
         }
     }
     private static AutomationElement FindComposerRequired(AutomationElement root)
@@ -596,5 +883,15 @@ public sealed class ZCodePlugin : IHarnessPlugin
         catch (ElementNotAvailableException) { return false; }
     }
     private static object Summarize(AutomationElement e) => new { name = e.Cached.Name, type = e.Cached.ControlType.ProgrammaticName, id = e.Cached.AutomationId, enabled = e.Cached.IsEnabled, focused = e.Cached.HasKeyboardFocus, selected = IsSelected(e) };
-    public void Dispose() { }
+    public void Dispose()
+    {
+        CancellationTokenSource? cancellation;
+        lock (_inputProbeSync)
+        {
+            cancellation = _inputWatcherCancellation;
+            _inputWatcherCancellation = null;
+        }
+        cancellation?.Cancel();
+        cancellation?.Dispose();
+    }
 }

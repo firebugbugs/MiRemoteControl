@@ -13,28 +13,19 @@ MiRemoteControl — C# 核心与插件控制终端
   mrc remote status
   mrc remote select <plugin-id>
   mrc remote driver select <remote-plugin-id>
-  mrc remote driver select <remote-plugin-id>
   mrc remote press <power|up|down|left|right|ok|back|home|menu|tv|volume-up|volume-down>
   mrc voice models
   mrc voice model status
   mrc voice model select <model-file-name>
   mrc voice latest status | play | pause | toggle
-  mrc zcode open [--exe <ZCode.exe>] [--window <handle>]
-  mrc zcode close
-  mrc zcode input --text "内容" [--replace]
-  mrc zcode input --file prompt.txt [--replace]
-  mrc zcode send
-  mrc zcode stop
-  mrc zcode confirm up | down | select | submit | status
-  mrc zcode status | inspect
   mrc invoke <plugin-id> <action-id> [--key value ...]
-所有命令可加 --json；ZCode 操作可加 --exe / --window 精确选择目标。
+所有命令可加 --json；目标插件的参数和动作通过 plugins 查询后使用 invoke 调用。
 remote press 会产生与真实遥控器一致的按键状态；Voice 不允许模拟。Power 会开关当前选择的工作插件。
 语音模型支持 Whisper GGML 文件，以及 Qwen3-ASR/SenseVoice 的 sherpa-onnx 模型目录；使用 models 查询后按返回的 id 选择。
 voice latest 控制只保留一份的最近语音录音；play 从头播放或继续，pause 暂停，toggle 供界面切换。
 input 默认追加；select 选择当前选项，submit 点击确认卡片提交按钮。
 start 会启动 Avalonia 框架并由它托管后台；框架退出时遥控器插件也会停止。
-关闭后台使用 mrc stop；停止 ZCode 任务使用 mrc zcode stop。
+关闭后台使用 mrc stop；停止目标任务请调用对应插件声明的 stop 动作。
 """);
     return 0;
 }
@@ -103,18 +94,9 @@ try
             }
             else throw new ArgumentException("voice 需要 models、model status、model select <model-file-name> 或 latest status/play/pause/toggle。");
         }
-        else if (tokens[0] == "zcode" && tokens.Length >= 2)
-        {
-            plugin = "mrc.zcode"; action = tokens[1]; offset = 2;
-            if (action == "confirm")
-            {
-                if (tokens.Length < 3) throw new ArgumentException("confirm 需要 up/down/select/submit/status。");
-                action = "confirm." + tokens[2]; offset = 3;
-            }
-        }
         else if (tokens[0] == "invoke" && tokens.Length >= 3) { plugin = tokens[1]; action = tokens[2]; offset = 3; }
         else throw new ArgumentException("未知命令。执行 mrc help 查看用法。");
-        var options = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        var options = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (positionalKey is not null) options[positionalKey] = positionalValue!;
         for (int i = offset; i < tokens.Length; i++)
         {

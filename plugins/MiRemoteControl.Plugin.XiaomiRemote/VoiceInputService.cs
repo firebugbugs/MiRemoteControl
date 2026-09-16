@@ -49,9 +49,40 @@ public sealed class VoiceInputService : IDisposable
         }
         catch (Exception e) { _lastError = e.Message; VoiceDiagnostics.Log($"RECOGNIZER-ERROR {e.GetType().Name}: {e.Message}"); }
     }
-    public IReadOnlyList<string> Devices() => Enumerable.Range(0, WaveIn.DeviceCount).Select(i => WaveIn.GetCapabilities(i).ProductName).ToArray();
-    public VoiceStatus Status() => new(_engine is not null, _listening, _recognizer,
-        _deviceName ?? (_capture is null ? null : WaveIn.GetCapabilities(_capture.DeviceNumber).ProductName), _lastText, _lastError);
+    /// <summary>
+    /// Audio-device enumeration is a convenience for the voice UI only. Some
+    /// Windows audio drivers temporarily reject capability queries while the
+    /// device stack is being reconfigured; that must never make the remote
+    /// driver appear offline.
+    /// </summary>
+    public IReadOnlyList<string> Devices()
+    {
+        try
+        {
+            return Enumerable.Range(0, WaveIn.DeviceCount)
+                .Select(index => WaveIn.GetCapabilities(index).ProductName)
+                .ToArray();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or NAudio.MmException)
+        {
+            _lastError ??= $"无法读取录音设备：{exception.Message}";
+            return [];
+        }
+    }
+
+    public VoiceStatus Status()
+    {
+        string? device = _deviceName;
+        if (device is null && _capture is not null)
+        {
+            try { device = WaveIn.GetCapabilities(_capture.DeviceNumber).ProductName; }
+            catch (Exception exception) when (exception is InvalidOperationException or NAudio.MmException)
+            {
+                _lastError ??= $"无法读取当前录音设备：{exception.Message}";
+            }
+        }
+        return new(_engine is not null, _listening, _recognizer, device, _lastText, _lastError);
+    }
     public bool Start(int? deviceIndex = null)
     {
         lock (_sync)

@@ -50,9 +50,10 @@ internal static class NativeWindow
         try { return GetWindowRect(window.Handle, out var rect) ? Math.Max(0L, (long)(rect.Right - rect.Left) * (rect.Bottom - rect.Top)) : 0L; }
         catch { return 0L; }
     }
-    public static void Focus(WindowTarget target)
+    public static void Focus(WindowTarget target, bool promoteToTopmost = false)
     {
         Validate(target);
+        if (IsForeground(target)) return;
         // Physical-remote events are dispatched by the background Host rather
         // than by the foreground desktop process. Grant the Host permission
         // to activate the target before attaching input queues; otherwise
@@ -80,10 +81,14 @@ internal static class NativeWindow
         try
         {
             ShowWindow(target.Handle, 9);
-            // Put the target above the current window while activation is
-            // requested. This is temporary and is always undone below.
-            SetWindowPos(target.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-            BringWindowToTop(target.Handle);
+            // Editing needs keyboard focus, not visibility above a topmost
+            // TV editor. Only an explicit open operation may promote ZCode;
+            // ordinary activation stays in the normal window band below TV.
+            if (promoteToTopmost)
+            {
+                SetWindowPos(target.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                BringWindowToTop(target.Handle);
+            }
             if (!SetForegroundWindow(target.Handle)) EarnForeground(target.Handle);
             // SetForegroundWindow is sufficient after the temporary
             // top-most ordering above. SwitchToThisWindow is a legacy
@@ -95,7 +100,8 @@ internal static class NativeWindow
             // Foreground changes asynchronously. Demote unconditionally so a
             // successful activation that lands just after this block cannot
             // leave ZCode permanently above every other application.
-            SetWindowPos(target.Handle, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            if (promoteToTopmost)
+                SetWindowPos(target.Handle, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
             if (attachedCurrent) AttachThreadInput(currentThread, targetThread, false);
             if (attachedForeground) AttachThreadInput(foregroundThread, targetThread, false);
         }
@@ -106,7 +112,8 @@ internal static class NativeWindow
             // Never leave the target pinned top-most when activation failed;
             // a window that is always-on-top but has no focus is worse than
             // one resting in the normal Z-order.
-            SetWindowPos(target.Handle, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            if (promoteToTopmost)
+                SetWindowPos(target.Handle, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
             throw new ControlException("FocusDenied", "Windows 未允许切到 ZCode 前台。请先激活 ZCode，再执行命令。");
         }
     }
@@ -161,12 +168,64 @@ internal static class NativeWindow
         {
             RequireForeground(target); checkFocus();
             if (line.index > 0) Key(target, 0x0D, 0x10); // Shift+Enter: newline, never submit.
-            foreach (var chunk in line.value.Chunk(32))
+            foreach (var rune in line.value.EnumerateRunes())
             {
                 RequireForeground(target); checkFocus(); CheckModifiers();
-                Send(chunk.SelectMany(c => new[] { Input(0, c, 4), Input(0, c, 6) }).ToArray());
-                Thread.Sleep(5);
+                Send(rune.ToString().SelectMany(c => new[] { Input(0, c, 4), Input(0, c, 6) }).ToArray());
+                // ZCode's controlled contenteditable must process each input
+                // event before the next one or Chromium can retain only the
+                // tail of a full-value replacement.
+                Thread.Sleep(10);
             }
+        }
+    }
+    public static void PasteText(WindowTarget target, string text, Action checkFocus)
+    {
+        using var clipboardReady = new ManualResetEventSlim();
+        using var pasteFinished = new ManualResetEventSlim();
+        Exception? clipboardFailure = null;
+        var clipboardThread = new Thread(() =>
+        {
+            System.Runtime.InteropServices.ComTypes.IDataObject? previous = null;
+            var initialized = OleInitialize(0) >= 0;
+            try
+            {
+                if (OleGetClipboard(out previous) < 0) previous = null;
+                var replacement = new System.Windows.DataObject();
+                replacement.SetData(System.Windows.DataFormats.UnicodeText, text);
+                var replacementObject = (System.Runtime.InteropServices.ComTypes.IDataObject)replacement;
+                Marshal.ThrowExceptionForHR(OleSetClipboard(replacementObject));
+                clipboardReady.Set();
+                pasteFinished.Wait();
+                Marshal.ThrowExceptionForHR(OleSetClipboard(previous));
+            }
+            catch (Exception exception)
+            {
+                clipboardFailure = exception;
+                clipboardReady.Set();
+            }
+            finally
+            {
+                if (initialized) OleUninitialize();
+            }
+        });
+        clipboardThread.SetApartmentState(ApartmentState.STA);
+        clipboardThread.IsBackground = true;
+        clipboardThread.Start();
+        clipboardReady.Wait();
+        if (clipboardFailure is not null)
+            throw new ControlException("ClipboardUnavailable", $"无法准备完整文本粘贴：{clipboardFailure.Message}");
+        try
+        {
+            RequireForeground(target);
+            checkFocus();
+            Key(target, 0x56, 0x11); // Ctrl+V
+            Thread.Sleep(100);
+        }
+        finally
+        {
+            pasteFinished.Set();
+            clipboardThread.Join(2000);
         }
     }
     private static void CheckModifiers()
@@ -218,6 +277,10 @@ internal static class NativeWindow
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_SHOWWINDOW = 0x0040;
     [DllImport("user32.dll", SetLastError = true)] private static extern bool PostMessage(nint hwnd, uint message, nuint wparam, nint lparam);
+    [DllImport("ole32.dll")] private static extern int OleInitialize(nint reserved);
+    [DllImport("ole32.dll")] private static extern void OleUninitialize();
+    [DllImport("ole32.dll")] private static extern int OleGetClipboard(out System.Runtime.InteropServices.ComTypes.IDataObject? dataObject);
+    [DllImport("ole32.dll")] private static extern int OleSetClipboard(System.Runtime.InteropServices.ComTypes.IDataObject? dataObject);
     [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll", SetLastError = true)] private static extern uint SendInput(uint count, INPUT[] inputs, int size);
 }

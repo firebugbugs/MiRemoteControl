@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Avalonia;
@@ -27,18 +26,18 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(120) };
     private readonly EnhancedRemoteKeysController _enhancedRemoteKeys = new();
     private readonly GlobalEscapeMonitor _escapeMonitor;
-    private readonly GlobalTvKeyMonitor _tvKeyMonitor;
     private readonly Dictionary<string, ToggleButton> _buttons;
     private readonly Dictionary<string, bool> _voiceModelLoadedFlags = new(StringComparer.OrdinalIgnoreCase);
     private bool _started;
     private bool _loading;
     private string _pluginDirectory = Path.Combine(AppContext.BaseDirectory, "plugins");
     private string _targetPluginDirectory = Path.Combine(AppContext.BaseDirectory, "plugins", "targets");
-    private DateTimeOffset _nextPluginScan;
-    private string? _zCodeBundlePath;
-    private string? _zCodeBundleVersion;
-    private bool _zCodeLoaded;
-    private string _selectedPluginId = "mrc.zcode";
+    private string _selectedPluginId = "";
+    private string _selectedPluginName = "目标插件";
+    private readonly HashSet<string> _loadedTargetPluginIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _selectedTargetActions = new(StringComparer.OrdinalIgnoreCase);
+    private TextBlock? _selectedPluginStatus;
+    private string _targetPluginsSignature = "";
     private bool _pluginPowerBusy;
     private DateTimeOffset _lastPowerFeedbackAt;
     private DateTimeOffset _lastHomeEventAt;
@@ -50,12 +49,22 @@ public partial class MainWindow : Window
     private DateTimeOffset _lastPowerCloseEventAt;
     private bool _powerCloseEventsInitialized;
     private bool _powerCloseRemoteHeld;
+    private readonly Dictionary<string, DateTimeOffset> _cursorEventAt = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _cursorRemoteHeld = new(StringComparer.OrdinalIgnoreCase);
+    private bool _cursorEventsInitialized;
     private CancellationTokenSource? _remoteEventCancellation;
     private BigScreenTextWindow? _bigScreenTextWindow;
     private string? _bigScreenProbePluginId;
     private long _bigScreenProbeRevision = -1;
     private string? _bigScreenProbeText;
+    private int? _bigScreenProbeCaretIndex;
     private CancellationTokenSource? _bigScreenProbeCancellation;
+    private CancellationTokenSource? _bigScreenEditCancellation;
+    private Task _bigScreenEditTask = Task.CompletedTask;
+    private readonly SemaphoreSlim _bigScreenSyncGate = new(1, 1);
+    private bool _bigScreenLocalDirty;
+    private int _bigScreenEditGeneration;
+    private bool _openingBigScreen;
     private VoicePromptWindow? _voicePromptWindow;
     private int _powerFlashGeneration;
     private string _voiceModelDirectory = Path.Combine(
@@ -71,7 +80,6 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _escapeMonitor = new GlobalEscapeMonitor(HandleGlobalEscape);
-        _tvKeyMonitor = new GlobalTvKeyMonitor(HandleGlobalTvKey);
         DayNightSwitch.IsChecked = (Application.Current as App)?.IsDarkTheme ?? false;
         StartWithWindowsSwitch.IsChecked = StartupRegistrationService.IsEnabled();
         _buttons = new(StringComparer.OrdinalIgnoreCase)
@@ -90,7 +98,6 @@ public partial class MainWindow : Window
             ["VolumeDown"] = VolumeDownButton
         };
 
-        RefreshInstalledPlugins(force: true);
         Opened += OnWindowOpened;
         PropertyChanged += (_, args) =>
         {
@@ -101,7 +108,9 @@ public partial class MainWindow : Window
 
     private async void OnWindowOpened(object? sender, EventArgs e)
     {
-        if (_started) return;
+        // Rider's preview also opens this window; it must not own the real
+        // remote service, consume button events, or launch the HID helper.
+        if (Design.IsDesignMode || _started) return;
         _started = true;
         try
         {
@@ -110,7 +119,7 @@ public partial class MainWindow : Window
             {
                 SetRemoteConnectionState(false, start.Message);
                 VoiceTranslationStatus.Text = start.Message;
-                SetZCodeLoaded(false);
+                ClearTargetPluginPanel();
                 return;
             }
         }
@@ -174,13 +183,15 @@ public partial class MainWindow : Window
         _remoteEventCancellation?.Dispose();
         _remoteEventCancellation = null;
         _escapeMonitor.Dispose();
-        _tvKeyMonitor.Dispose();
         _enhancedRemoteKeys.Dispose();
         _voicePromptWindow?.Close();
         _voicePromptWindow = null;
         _bigScreenProbeCancellation?.Cancel();
         _bigScreenProbeCancellation?.Dispose();
         _bigScreenProbeCancellation = null;
+        _bigScreenEditCancellation?.Cancel();
+        _bigScreenEditCancellation?.Dispose();
+        _bigScreenEditCancellation = null;
         _bigScreenTextWindow?.Close();
         _bigScreenTextWindow = null;
     }
@@ -191,14 +202,13 @@ public partial class MainWindow : Window
         _loading = true;
         try
         {
-            RefreshInstalledPlugins(force: false);
             var result = await _client.InvokeAsync("core", "status", timeoutMs: 1000);
             if (!result.Success)
             {
                 SetRemoteConnectionState(false, result.Message);
                 VoiceTranslationStatus.Text = result.Message;
                 ResetRemoteBattery("后台未连接，暂时无法读取遥控器电量");
-                SetZCodeLoaded(false);
+                ClearTargetPluginPanel();
                 return;
             }
 
@@ -259,7 +269,7 @@ public partial class MainWindow : Window
             SetRemoteConnectionState(false, exception.Message);
             VoiceTranslationStatus.Text = exception.Message;
             ResetRemoteBattery("暂时无法读取遥控器电量");
-            SetZCodeLoaded(false);
+            ClearTargetPluginPanel();
         }
         finally
         {
@@ -382,43 +392,155 @@ public partial class MainWindow : Window
 
     private void UpdatePluginPanel(JsonElement state)
     {
-        var directoryChanged = false;
         if (state.TryGetProperty("selectedPlugin", out var selectedPlugin) &&
             selectedPlugin.GetString() is { Length: > 0 } selectedId)
-        {
             _selectedPluginId = selectedId;
-            ZCodePluginSelector.IsChecked = string.Equals(selectedId, "mrc.zcode", StringComparison.OrdinalIgnoreCase);
-        }
 
         if (state.TryGetProperty("pluginDirectory", out var directory) &&
-            directory.GetString() is { Length: > 0 } path &&
-            !string.Equals(_pluginDirectory, path, StringComparison.OrdinalIgnoreCase))
+            directory.GetString() is { Length: > 0 } path)
         {
             _pluginDirectory = path;
             _targetPluginDirectory = Path.Combine(path, "targets");
-            directoryChanged = true;
         }
         if (state.TryGetProperty("targetPluginDirectory", out var targetDirectory) &&
-            targetDirectory.GetString() is { Length: > 0 } targetPath &&
-            !string.Equals(_targetPluginDirectory, targetPath, StringComparison.OrdinalIgnoreCase))
-        {
+            targetDirectory.GetString() is { Length: > 0 } targetPath)
             _targetPluginDirectory = targetPath;
-            directoryChanged = true;
-        }
 
-        var loaded = false;
-        string? loadedVersion = null;
+        var targets = new List<TargetPluginView>();
+        _loadedTargetPluginIds.Clear();
+        _selectedTargetActions.Clear();
         if (state.TryGetProperty("plugins", out var plugins))
             foreach (var plugin in plugins.EnumerateArray())
-                if (string.Equals(plugin.GetProperty("id").GetString(), "mrc.zcode", StringComparison.OrdinalIgnoreCase))
+            {
+                var pluginId = plugin.GetProperty("id").GetString();
+                if (string.IsNullOrWhiteSpace(pluginId) ||
+                    (plugin.TryGetProperty("kind", out var kind) && kind.GetString() != PluginKinds.Target)) continue;
+                _loadedTargetPluginIds.Add(pluginId);
+                var name = plugin.TryGetProperty("name", out var nameValue) ? nameValue.GetString() ?? pluginId : pluginId;
+                var version = plugin.TryGetProperty("version", out var versionValue) ? versionValue.GetString() ?? "?" : "?";
+                var actions = plugin.TryGetProperty("actions", out var actionValues)
+                    ? actionValues.EnumerateArray()
+                        .Select(action => action.TryGetProperty("id", out var id) ? id.GetString() : null)
+                        .Where(id => !string.IsNullOrWhiteSpace(id))
+                        .Select(id => id!)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                targets.Add(new TargetPluginView(pluginId, name, version, actions));
+                if (string.Equals(pluginId, _selectedPluginId, StringComparison.OrdinalIgnoreCase))
                 {
-                    loaded = true;
-                    loadedVersion = plugin.TryGetProperty("version", out var version) ? version.GetString() : null;
-                    break;
+                    _selectedPluginName = name;
+                    _selectedTargetActions.UnionWith(actions);
                 }
+            }
 
-        RefreshInstalledPlugins(force: directoryChanged);
-        SetZCodeLoaded(loaded, loadedVersion);
+        RenderTargetPluginCards(targets);
+    }
+
+    private void RenderTargetPluginCards(IReadOnlyList<TargetPluginView> targets)
+    {
+        var signature = _selectedPluginId + "|" + string.Join('|', targets.Select(target =>
+            $"{target.Id}:{target.Name}:{target.Version}:{string.Join(',', target.Actions.Order())}"));
+        if (signature == _targetPluginsSignature) return;
+        _targetPluginsSignature = signature;
+        _selectedPluginStatus = null;
+        TargetPluginCardsPanel.Children.Clear();
+        PluginCountText.Text = targets.Count == 0 ? "暂无插件" : $"{targets.Count} 个已加载";
+        if (targets.Count == 0)
+        {
+            TargetPluginCardsPanel.Children.Add(new TextBlock
+            {
+                Text = "未发现目标插件",
+                Foreground = ThemeBrush("Theme.TextMuted"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 22)
+            });
+            PowerButton.IsEnabled = false;
+            return;
+        }
+
+        foreach (var target in targets)
+        {
+            var selected = target.Id.Equals(_selectedPluginId, StringComparison.OrdinalIgnoreCase);
+            var status = new TextBlock
+            {
+                Text = $"{target.Id} · v{target.Version}",
+                FontSize = 12,
+                Foreground = ThemeBrush("Theme.TextMuted"),
+                Margin = new Thickness(0, 4, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            if (selected) _selectedPluginStatus = status;
+            var icon = new Border
+            {
+                Width = 34,
+                Height = 34,
+                CornerRadius = new CornerRadius(9),
+                Background = new SolidColorBrush(Color.Parse("#5A4BCB")),
+                Child = new TextBlock
+                {
+                    Text = target.Name.Trim().FirstOrDefault().ToString().ToUpperInvariant(),
+                    FontSize = 17,
+                    FontWeight = FontWeight.Bold,
+                    Foreground = Brushes.White,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            var labels = new StackPanel { Margin = new Thickness(2, 0, 12, 0) };
+            labels.Children.Add(new TextBlock { Text = target.Name, FontSize = 15, FontWeight = FontWeight.SemiBold });
+            labels.Children.Add(status);
+            var selector = new RadioButton
+            {
+                GroupName = "WorkingPlugin",
+                Tag = target.Id,
+                IsChecked = selected,
+                Content = "工作插件",
+                Margin = new Thickness(0, 0, 8, 0),
+                VerticalAlignment = VerticalAlignment.Top
+            };
+            selector.Click += SelectPlugin;
+            var header = new Grid { ColumnDefinitions = new ColumnDefinitions("42,*,Auto") };
+            header.Children.Add(icon);
+            Grid.SetColumn(labels, 1); header.Children.Add(labels);
+            Grid.SetColumn(selector, 2); header.Children.Add(selector);
+            var content = new StackPanel();
+            content.Children.Add(header);
+            var actionPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(42, 14, 0, 0), Spacing = 8 };
+            AddTargetActionButton(actionPanel, target, TargetPluginActions.Open, "打开");
+            AddTargetActionButton(actionPanel, target, TargetPluginActions.Status, "读取状态");
+            AddTargetActionButton(actionPanel, target, TargetPluginActions.Stop, "停止任务");
+            if (actionPanel.Children.Count > 0) content.Children.Add(actionPanel);
+            TargetPluginCardsPanel.Children.Add(new Border
+            {
+                Background = ThemeBrush(selected ? "Theme.SurfaceSelected" : "Theme.Surface"),
+                BorderBrush = ThemeBrush(selected ? "Theme.AccentBorder" : "Theme.Border"),
+                BorderThickness = new Thickness(selected ? 1.2 : 1),
+                CornerRadius = new CornerRadius(11),
+                Padding = new Thickness(16),
+                Child = content
+            });
+        }
+        PowerButton.IsEnabled = SelectedPluginSupportsPower && !_pluginPowerBusy;
+        ToolTip.SetTip(PowerButton, $"启动或关闭当前工作插件：{_selectedPluginName}");
+    }
+
+    private void AddTargetActionButton(Panel panel, TargetPluginView target, string action, string label)
+    {
+        if (!target.Actions.Contains(action)) return;
+        var button = new Button { Content = label, Tag = new TargetActionRequest(target.Id, action), Classes = { "compact" } };
+        button.Click += InvokeTargetAction;
+        panel.Children.Add(button);
+    }
+
+    private IBrush? ThemeBrush(string key) =>
+        Resources.TryGetResource(key, ActualThemeVariant, out var value) ? value as IBrush : null;
+
+    private void ClearTargetPluginPanel()
+    {
+        _loadedTargetPluginIds.Clear();
+        _selectedTargetActions.Clear();
+        _targetPluginsSignature = "";
+        RenderTargetPluginCards([]);
     }
 
     private void UpdateVoiceModels(JsonElement state)
@@ -531,7 +653,7 @@ public partial class MainWindow : Window
     {
         var manager = new PluginManagerWindow(_targetPluginDirectory);
         await manager.ShowDialog(this);
-        RefreshInstalledPlugins(force: true);
+        await LoadState();
     }
 
     private async void CheckAppUpdate(object? sender, RoutedEventArgs e)
@@ -587,116 +709,11 @@ public partial class MainWindow : Window
         ? $"{bytes / (1024d * 1024 * 1024):0.0} GB"
         : $"{bytes / (1024d * 1024):0} MB";
 
-    private void RefreshInstalledPlugins(bool force)
-    {
-        var now = DateTimeOffset.Now;
-        if (!force && now < _nextPluginScan) return;
-        _nextPluginScan = now.AddSeconds(1);
-
-        string? bundlePath = null;
-        string? bundleVersion = null;
-        try
-        {
-            if (Directory.Exists(_targetPluginDirectory))
-                foreach (var file in Directory.EnumerateFiles(_targetPluginDirectory, "*", SearchOption.TopDirectoryOnly))
-                    if (TryReadZCodeBundle(file, out bundleVersion))
-                    {
-                        bundlePath = file;
-                        break;
-                    }
-        }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-
-        var changed = !string.Equals(_zCodeBundlePath, bundlePath, StringComparison.OrdinalIgnoreCase) ||
-                      !string.Equals(_zCodeBundleVersion, bundleVersion, StringComparison.OrdinalIgnoreCase);
-        _zCodeBundlePath = bundlePath;
-        _zCodeBundleVersion = bundleVersion;
-        ApplyPluginPresentation(changed);
-    }
-
-    private static bool TryReadZCodeBundle(string path, out string? version)
-    {
-        version = null;
-        try
-        {
-            using var archive = ZipFile.OpenRead(path);
-            ZipArchiveEntry? manifest = null;
-            foreach (var entry in archive.Entries)
-            {
-                var normalized = entry.FullName.Replace('\\', '/').TrimStart('/');
-                if (!string.Equals(normalized, "plugin.json", StringComparison.OrdinalIgnoreCase)) continue;
-                if (manifest is not null) return false;
-                manifest = entry;
-            }
-            if (manifest is null) return false;
-
-            using var stream = manifest.Open();
-            using var document = JsonDocument.Parse(stream);
-            var root = document.RootElement;
-            if (!root.TryGetProperty("id", out var id) ||
-                !string.Equals(id.GetString(), "mrc.zcode", StringComparison.OrdinalIgnoreCase)) return false;
-            if (!root.TryGetProperty("apiVersion", out var apiVersion) || apiVersion.GetInt32() != 1) return false;
-            version = root.TryGetProperty("version", out var pluginVersion) ? pluginVersion.GetString() : null;
-            return true;
-        }
-        catch (InvalidDataException) { return false; }
-        catch (IOException) { return false; }
-        catch (UnauthorizedAccessException) { return false; }
-        catch (JsonException) { return false; }
-        catch (InvalidOperationException) { return false; }
-    }
-
-    private void SetZCodeLoaded(bool loaded, string? version = null)
-    {
-        var changed = _zCodeLoaded != loaded;
-        _zCodeLoaded = loaded;
-        if (!loaded)
-        {
-            PowerButton.IsChecked = false;
-        }
-        if (!string.IsNullOrWhiteSpace(version)) _zCodeBundleVersion = version;
-        ApplyPluginPresentation(changed);
-        if (changed && loaded && IsVisible &&
-            string.Equals(_selectedPluginId, "mrc.zcode", StringComparison.OrdinalIgnoreCase))
-            _ = RefreshSelectedPluginPowerStateAsync(updateStatusText: false);
-    }
-
-    private void ApplyPluginPresentation(bool stateChanged)
-    {
-        var installed = _zCodeBundlePath is not null && File.Exists(_zCodeBundlePath);
-        ZCodePluginCard.IsVisible = installed;
-        NoPluginsText.IsVisible = !installed;
-        PluginCountText.Text = installed ? _zCodeLoaded ? "1 个已加载" : "1 个已安装" : "暂无插件";
-
-        var available = installed && _zCodeLoaded;
-        OpenZCodeButton.IsEnabled = available;
-        ReadZCodeStatusButton.IsEnabled = available;
-        StopZCodeTaskButton.IsEnabled = available;
-        PowerButton.IsEnabled = available && !_pluginPowerBusy &&
-                                string.Equals(_selectedPluginId, "mrc.zcode", StringComparison.OrdinalIgnoreCase);
-        ZCodeAvailabilityText.Text = available ? "可用" : OperatingSystem.IsWindows() ? "未连接" : "仅 Windows";
-
-        if (!installed) return;
-        var isAutomaticStatus = ZCodePluginStatus.Text?.StartsWith("插件已加载", StringComparison.Ordinal) == true ||
-                                ZCodePluginStatus.Text?.StartsWith("已安装", StringComparison.Ordinal) == true ||
-                                ZCodePluginStatus.Text is "正在检查后台状态" or "后台未连接";
-        if (!stateChanged && !isAutomaticStatus) return;
-        var versionSuffix = string.IsNullOrWhiteSpace(_zCodeBundleVersion) ? "" : $" · v{_zCodeBundleVersion}";
-        ZCodePluginStatus.Text = available
-            ? $"插件已加载{versionSuffix}"
-            : $"已安装{versionSuffix} · {(OperatingSystem.IsWindows() ? "等待后台连接" : "当前平台不可用")}";
-    }
-
     private void OpenPluginFolder(object? sender, RoutedEventArgs e)
     {
         Directory.CreateDirectory(_pluginDirectory);
         OpenPath(_pluginDirectory);
     }
-
-    private async void OpenZCode(object? sender, RoutedEventArgs e) => await InvokeZCodeAsync("open", "正在打开…");
-    private async void ReadZCodeStatus(object? sender, RoutedEventArgs e) => await InvokeZCodeAsync("status", "正在读取…");
-    private async void StopZCodeTask(object? sender, RoutedEventArgs e) => await InvokeZCodeAsync("stop", "正在停止…");
 
     private async void SelectPlugin(object? sender, RoutedEventArgs e)
     {
@@ -706,51 +723,72 @@ public partial class MainWindow : Window
             var result = await _client.InvokeAsync("core", "remote.select", new() { ["plugin"] = pluginId }, timeoutMs: 3000);
             if (!result.Success)
             {
-                ZCodePluginStatus.Text = result.Message;
-                ZCodePluginSelector.IsChecked = string.Equals(_selectedPluginId, "mrc.zcode", StringComparison.OrdinalIgnoreCase);
+                SetSelectedPluginStatus(result.Message);
                 return;
             }
             _selectedPluginId = pluginId;
-            ZCodePluginSelector.IsChecked = string.Equals(pluginId, "mrc.zcode", StringComparison.OrdinalIgnoreCase);
-            ToolTip.SetTip(PowerButton, "启动或关闭当前工作插件：ZCode 控制");
-            ApplyPluginPresentation(stateChanged: false);
+            await LoadState();
+            ToolTip.SetTip(PowerButton, $"启动或关闭当前工作插件：{_selectedPluginName}");
             await RefreshSelectedPluginPowerStateAsync(updateStatusText: false);
         }
         catch (Exception exception)
         {
-            ZCodePluginStatus.Text = exception.Message;
+            SetSelectedPluginStatus(exception.Message);
         }
+    }
+
+    private async void InvokeTargetAction(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { Tag: TargetActionRequest request }) return;
+        SetSelectedPluginStatus("正在执行…");
+        try
+        {
+            if (request.Action == TargetPluginActions.Open) await _client.AllowForegroundAsync();
+            var result = await _client.InvokeAsync(request.PluginId, request.Action);
+            SetSelectedPluginStatus(result.Message);
+            if (result.Success && request.Action == TargetPluginActions.Open) FlashPowerButton();
+        }
+        catch (Exception exception)
+        {
+            SetSelectedPluginStatus(exception.Message);
+        }
+    }
+
+    private void SetSelectedPluginStatus(string message)
+    {
+        if (_selectedPluginStatus is not null) _selectedPluginStatus.Text = message;
+        else VoiceTranslationStatus.Text = message;
     }
 
     private async void PowerButtonClick(object? sender, RoutedEventArgs e)
     {
         if (_pluginPowerBusy) return;
-        if (!string.Equals(_selectedPluginId, "mrc.zcode", StringComparison.OrdinalIgnoreCase) || !_zCodeLoaded)
+        if (!SelectedPluginSupportsPower)
         {
             PowerButton.IsChecked = false;
-            ZCodePluginStatus.Text = "当前工作插件尚不可用";
+            SetSelectedPluginStatus("当前工作插件尚不可用");
             return;
         }
 
         _pluginPowerBusy = true;
         PowerButton.IsEnabled = false;
-        ZCodePluginStatus.Text = "正在执行虚拟电源键…";
+        SetSelectedPluginStatus("正在执行虚拟电源键…");
         try
         {
             await _client.AllowForegroundAsync();
             var result = await _client.InvokeAsync("core", "remote.press", new() { ["button"] = "Power" });
-            ZCodePluginStatus.Text = result.Message;
+            SetSelectedPluginStatus(result.Message);
             FlashPowerButton();
         }
         catch (Exception exception)
         {
             PowerButton.IsChecked = false;
-            ZCodePluginStatus.Text = exception.Message;
+            SetSelectedPluginStatus(exception.Message);
         }
         finally
         {
             _pluginPowerBusy = false;
-            ApplyPluginPresentation(stateChanged: false);
+            PowerButton.IsEnabled = SelectedPluginSupportsPower;
         }
     }
 
@@ -785,8 +823,7 @@ public partial class MainWindow : Window
 
     private async Task RefreshSelectedPluginPowerStateAsync(bool updateStatusText)
     {
-        if (!IsVisible || !_zCodeLoaded ||
-            !string.Equals(_selectedPluginId, "mrc.zcode", StringComparison.OrdinalIgnoreCase))
+        if (!IsVisible || !SelectedPluginSupportsPower)
         {
             return;
         }
@@ -794,11 +831,11 @@ public partial class MainWindow : Window
         try
         {
             var result = await _client.InvokeAsync(_selectedPluginId, "status", timeoutMs: 4000);
-            if (updateStatusText || !result.Success) ZCodePluginStatus.Text = result.Message;
+            if (updateStatusText || !result.Success) SetSelectedPluginStatus(result.Message);
         }
         catch (Exception exception)
         {
-            if (updateStatusText) ZCodePluginStatus.Text = exception.Message;
+            if (updateStatusText) SetSelectedPluginStatus(exception.Message);
         }
     }
 
@@ -850,8 +887,6 @@ public partial class MainWindow : Window
         return true;
     }
 
-    private void HandleGlobalTvKey() => Dispatcher.UIThread.Post(ToggleBigScreenFromRemote);
-
     private async Task RunRemoteEventLoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -870,6 +905,7 @@ public partial class MainWindow : Window
                             ref _tvRemoteHeld, ToggleBigScreenFromRemote);
                         HandleRemoteToggleInputs(remote, "Power", ref _powerCloseEventsInitialized, ref _lastPowerCloseEventAt,
                             ref _powerCloseRemoteHeld, CloseBigScreenText);
+                        HandleRemoteCursorInputs(remote);
                     });
                 }
             }
@@ -928,31 +964,117 @@ public partial class MainWindow : Window
         }
     }
 
+    private void HandleRemoteCursorInputs(JsonElement remote)
+    {
+        if (!remote.TryGetProperty("recentInputs", out var recent) || recent.ValueKind != JsonValueKind.Array) return;
+        var entries = recent.EnumerateArray()
+                     .Where(item => item.TryGetProperty("button", out var buttonValue) &&
+                                    buttonValue.GetString() is "Up" or "Down" or "Left" or "Right")
+                     .OrderBy(item => item.GetProperty("occurredAt").GetDateTimeOffset())
+                     .ToArray();
+        if (!_cursorEventsInitialized)
+        {
+            _cursorEventsInitialized = true;
+            foreach (var entry in entries)
+            {
+                var button = entry.GetProperty("button").GetString()!;
+                _cursorEventAt[button] = entry.GetProperty("occurredAt").GetDateTimeOffset();
+                if (entry.GetProperty("isDown").GetBoolean()) _cursorRemoteHeld.Add(button);
+            }
+            return;
+        }
+
+        foreach (var entry in entries)
+        {
+            var button = entry.GetProperty("button").GetString()!;
+            var occurredAt = entry.GetProperty("occurredAt").GetDateTimeOffset();
+            if (_cursorEventAt.TryGetValue(button, out var lastEventAt) && occurredAt <= lastEventAt) continue;
+            _cursorEventAt[button] = occurredAt;
+
+            var isDown = entry.GetProperty("isDown").GetBoolean();
+            if (!isDown)
+            {
+                _cursorRemoteHeld.Remove(button);
+                continue;
+            }
+            if (!_cursorRemoteHeld.Add(button) || _bigScreenTextWindow is null) continue;
+
+            var keyId = entry.TryGetProperty("keyId", out var keyIdValue) ? keyIdValue.GetString() : null;
+            // Physical D-pad keys keep their normal keyboard delivery to the
+            // focused target editor. Simulated buttons have no OS key event,
+            // so only those need an explicit target action.
+            if (keyId?.StartsWith("VIRTUAL:", StringComparison.OrdinalIgnoreCase) == true)
+                _bigScreenTextWindow.MoveCaret(button);
+        }
+    }
+
     private void SetVoiceResultText(string text)
     {
-        // The big screen is strictly bound to the ZCode composer; recognition
-        // results reach it only through the input box itself.
+        // The big screen reads text only through the selected target plugin's
+        // standard input probe; recognition results never bypass that contract.
         VoiceResult.Text = text;
     }
 
-    private void ToggleBigScreenText()
+    private async void ToggleBigScreenText()
     {
         if (_bigScreenTextWindow is { } existing)
         {
-            existing.Close();
+            await FlushAndCloseBigScreenAsync(existing);
+            return;
+        }
+        if (_openingBigScreen) return;
+
+        if (!_selectedTargetActions.Contains(TargetPluginActions.InputWatch) ||
+            !_selectedTargetActions.Contains(TargetPluginActions.InputReplace))
+        {
+            VoiceTranslationStatus.Text = $"{_selectedPluginName} 未提供双向输入同步，无法打开大屏。";
+            return;
+        }
+
+        _openingBigScreen = true;
+        string initialText = string.Empty;
+        long initialRevision = -1;
+        int? initialCaretIndex = null;
+        var initialAvailable = false;
+        try
+        {
+            // Sample before covering Electron. This avoids opening on a blank
+            // placeholder while Chromium's accessibility tree is throttled.
+            for (var attempt = 0; attempt < 3 && !initialAvailable; attempt++)
+            {
+                var initial = await _client.InvokeAsync(
+                    _selectedPluginId,
+                    TargetPluginActions.InputWatch,
+                    new() { ["afterRevision"] = "-1", ["timeoutMs"] = "1200" },
+                    timeoutMs: 1500);
+                initialAvailable = TryReadInputProbe(
+                    initial, out initialText, out initialRevision, out initialCaretIndex);
+                if (!initialAvailable) await Task.Delay(100);
+            }
+
+        }
+        catch { /* failure is reported below; never open with an empty guess */ }
+        finally { _openingBigScreen = false; }
+        if (!initialAvailable)
+        {
+            VoiceTranslationStatus.Text = "未能读取 ZCode 输入框，TV 大屏未打开。";
             return;
         }
 
         var window = new BigScreenTextWindow();
+        window.TextEdited += text => QueueBigScreenEdit(window, text);
+        window.CloseRequested += CloseBigScreenText;
         _bigScreenTextWindow = window;
         _bigScreenProbePluginId = _selectedPluginId;
-        _bigScreenProbeRevision = -1;
-        _bigScreenProbeText = null;
+        _bigScreenProbeRevision = initialRevision;
+        _bigScreenProbeText = initialText;
+        _bigScreenProbeCaretIndex = initialCaretIndex;
+        _bigScreenLocalDirty = false;
         _bigScreenProbeCancellation?.Cancel();
         _bigScreenProbeCancellation?.Dispose();
         var probeCancellation = new CancellationTokenSource();
         _bigScreenProbeCancellation = probeCancellation;
-        window.SetText(null);
+        window.ApplySnapshot(initialText, initialCaretIndex);
         window.Closed += (_, _) =>
         {
             if (!ReferenceEquals(_bigScreenTextWindow, window)) return;
@@ -960,6 +1082,11 @@ public partial class MainWindow : Window
             _bigScreenProbePluginId = null;
             _bigScreenProbeRevision = -1;
             _bigScreenProbeText = null;
+            _bigScreenProbeCaretIndex = null;
+            _bigScreenLocalDirty = false;
+            _bigScreenEditCancellation?.Cancel();
+            _bigScreenEditCancellation?.Dispose();
+            _bigScreenEditCancellation = null;
             if (ReferenceEquals(_bigScreenProbeCancellation, probeCancellation))
             {
                 _bigScreenProbeCancellation = null;
@@ -970,15 +1097,116 @@ public partial class MainWindow : Window
         var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
         if (screen is not null) window.Position = screen.Bounds.Position;
         window.Show();
-        _ = RunBigScreenProbeLoopAsync(window, probeCancellation.Token);
+        _ = RunBigScreenWatchLoopAsync(window, probeCancellation.Token);
     }
 
-    private void CloseBigScreenText()
+    private void QueueBigScreenEdit(BigScreenTextWindow window, string text)
     {
-        _bigScreenTextWindow?.Close();
+        _bigScreenLocalDirty = true;
+        var generation = ++_bigScreenEditGeneration;
+        _bigScreenEditCancellation?.Cancel();
+        _bigScreenEditCancellation?.Dispose();
+        var cancellation = new CancellationTokenSource();
+        _bigScreenEditCancellation = cancellation;
+        _bigScreenEditTask = ReplaceBigScreenTextAsync(window, generation, cancellation, 180);
     }
 
-    private async void ToggleBigScreenFromRemote()
+    private async Task ReplaceBigScreenTextAsync(
+        BigScreenTextWindow window,
+        int generation,
+        CancellationTokenSource cancellation,
+        int delayMilliseconds)
+    {
+        var ct = cancellation.Token;
+        var gateEntered = false;
+        try
+        {
+            // Synchronization briefly focuses the Electron composer because
+            // its advertised ValuePattern setter ignores changed values.
+            // Wait for a real typing pause before that bounded focus handoff.
+            if (delayMilliseconds > 0) await Task.Delay(delayMilliseconds, ct);
+            await _bigScreenSyncGate.WaitAsync(ct);
+            gateEntered = true;
+
+            if (!ReferenceEquals(_bigScreenTextWindow, window)) return;
+            ct.ThrowIfCancellationRequested();
+            var localText = window.CurrentText;
+            // The foreground owner is the TV window, while the actual write
+            // is performed by the separate Host process. Explicitly delegate
+            // foreground permission before every replacement; otherwise
+            // Windows can reject the automatic sync even though a later
+            // close-time retry happens to succeed.
+            await _client.AllowForegroundAsync(CancellationToken.None);
+            var result = await _client.InvokeAsync(
+                _bigScreenProbePluginId ?? _selectedPluginId,
+                TargetPluginActions.InputReplace,
+                new() { ["text"] = localText },
+                timeoutMs: 3000,
+                // Once ZCode has begun replacing the value it must finish as
+                // one atomic operation. A newer TV edit waits on the gate and
+                // performs the next complete replacement; canceling this IPC
+                // call would only drop the response while the Host kept typing.
+                ct: CancellationToken.None);
+            if (!result.Success) return;
+
+            if (TryReadInputProbe(result, out var targetText, out var targetRevision, out var targetCaret))
+            {
+                _bigScreenProbeText = targetText;
+                _bigScreenProbeRevision = targetRevision;
+                _bigScreenProbeCaretIndex = targetCaret;
+            }
+            if (generation == _bigScreenEditGeneration &&
+                string.Equals(window.CurrentText, localText, StringComparison.Ordinal))
+                _bigScreenLocalDirty = false;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch { /* retain local contents; the next edit retries */ }
+        finally
+        {
+            // Restore TV focus before handing the gate to the next writer.
+            // A canceled debounce never took target focus and needs no activation.
+            if (gateEntered)
+            {
+                try
+                {
+                    if (ReferenceEquals(_bigScreenTextWindow, window)) window.FocusEditor();
+                }
+                finally { _bigScreenSyncGate.Release(); }
+            }
+            if (ReferenceEquals(_bigScreenEditCancellation, cancellation))
+                _bigScreenEditCancellation = null;
+            cancellation.Dispose();
+        }
+    }
+
+    private async void CloseBigScreenText()
+    {
+        if (_bigScreenTextWindow is { } window) await FlushAndCloseBigScreenAsync(window);
+    }
+
+    private async Task FlushAndCloseBigScreenAsync(BigScreenTextWindow window)
+    {
+        if (!ReferenceEquals(_bigScreenTextWindow, window)) return;
+        if (_bigScreenLocalDirty)
+        {
+            _bigScreenEditCancellation?.Cancel();
+            _bigScreenEditCancellation?.Dispose();
+            var cancellation = new CancellationTokenSource();
+            _bigScreenEditCancellation = cancellation;
+            var generation = _bigScreenEditGeneration;
+            _bigScreenEditTask = ReplaceBigScreenTextAsync(window, generation, cancellation, 0);
+            await _bigScreenEditTask;
+            if (_bigScreenLocalDirty)
+            {
+                VoiceTranslationStatus.Text = "TV 大屏内容尚未同步，已保留窗口，请稍后重试。";
+                window.FocusEditor();
+                return;
+            }
+        }
+        if (ReferenceEquals(_bigScreenTextWindow, window)) window.Close();
+    }
+
+    private void ToggleBigScreenFromRemote()
     {
         if (_bigScreenTextWindow is not null)
         {
@@ -986,68 +1214,82 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (string.Equals(_selectedPluginId, "mrc.zcode", StringComparison.OrdinalIgnoreCase))
-        {
-            try
-            {
-                // Windows exposes the RC003 TV usage as an OEM text key. It
-                // cannot be distinguished safely in a global keyboard hook,
-                // so remove only the known trailing artifact after the device-
-                // specific Raw Input event has identified this as the TV key.
-                await Task.Delay(30);
-                await _client.InvokeAsync("mrc.zcode", "input.remove-tv-artifact", timeoutMs: 1500);
-            }
-            catch { /* synchronization below remains the source of truth */ }
-        }
-
         ToggleBigScreenText();
     }
 
-    private async Task RunBigScreenProbeLoopAsync(BigScreenTextWindow window, CancellationToken ct)
+    private async Task RunBigScreenWatchLoopAsync(BigScreenTextWindow window, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested && ReferenceEquals(_bigScreenTextWindow, window))
         {
             try
             {
-                var pluginId = _selectedPluginId;
+                var pluginId = _bigScreenProbePluginId;
+                if (pluginId is null) return;
                 var result = await _client.InvokeAsync(
-                    pluginId, TargetPluginActions.InputProbe, timeoutMs: 1000, ct: ct);
-                if (!ReferenceEquals(_bigScreenTextWindow, window)) return;
-                if (result.Success &&
-                    result.Data is JsonElement { ValueKind: JsonValueKind.Object } data &&
-                    data.TryGetProperty("available", out var available) && available.GetBoolean() &&
-                    data.TryGetProperty("text", out var textValue) && textValue.ValueKind == JsonValueKind.String &&
-                    data.TryGetProperty("revision", out var revisionValue) && revisionValue.TryGetInt64(out var revision))
-                {
-                    var text = textValue.GetString() ?? string.Empty;
-                    if (!string.Equals(_bigScreenProbePluginId, pluginId, StringComparison.OrdinalIgnoreCase))
+                    pluginId,
+                    TargetPluginActions.InputWatch,
+                    new()
                     {
-                        _bigScreenProbePluginId = pluginId;
-                        _bigScreenProbeRevision = -1;
-                        _bigScreenProbeText = null;
-                    }
-                    // Exactly one request is in flight in this loop, so an old
-                    // response can never overwrite a newer snapshot. Comparing
-                    // text as well as revision handles a Host/plugin restart.
+                        ["afterRevision"] = _bigScreenProbeRevision.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        ["timeoutMs"] = "20000"
+                    },
+                    timeoutMs: 23000,
+                    ct: ct);
+                if (!ReferenceEquals(_bigScreenTextWindow, window)) return;
+                if (TryReadInputProbe(result, out var text, out var revision, out var caretIndex))
+                {
                     if (revision != _bigScreenProbeRevision ||
-                        !string.Equals(text, _bigScreenProbeText, StringComparison.Ordinal))
+                        !string.Equals(text, _bigScreenProbeText, StringComparison.Ordinal) ||
+                        caretIndex != _bigScreenProbeCaretIndex)
                     {
                         _bigScreenProbeRevision = revision;
                         _bigScreenProbeText = text;
-                        window.SetText(text);
+                        _bigScreenProbeCaretIndex = caretIndex;
+                        // While TV has an unsaved edit it is the sole authority.
+                        // A delayed target notification may update the cached
+                        // revision but must never overwrite the TV TextBox.
+                        if (!_bigScreenLocalDirty)
+                        {
+                            window.ApplySnapshot(text, caretIndex);
+                            window.FocusEditor();
+                        }
                     }
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
             catch
             {
-                // Keep the last confirmed snapshot and retry independently of
-                // the heavier core status refresh.
+                // The event subscription is renewed after transient Host or
+                // Electron window changes; the last complete value is kept.
             }
 
-            try { await Task.Delay(80, ct); }
+            try { await Task.Delay(100, ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
         }
+    }
+
+    private static bool TryReadInputProbe(
+        CommandResult result,
+        out string text,
+        out long revision,
+        out int? caretIndex)
+    {
+        text = string.Empty;
+        revision = -1;
+        caretIndex = null;
+        if (!result.Success ||
+            result.Data is not JsonElement { ValueKind: JsonValueKind.Object } data ||
+            !data.TryGetProperty("available", out var available) || !available.GetBoolean() ||
+            !data.TryGetProperty("text", out var textValue) || textValue.ValueKind != JsonValueKind.String ||
+            !data.TryGetProperty("revision", out var revisionValue) || !revisionValue.TryGetInt64(out revision))
+            return false;
+
+        text = textValue.GetString() ?? string.Empty;
+        if (data.TryGetProperty("caretIndex", out var caretValue) &&
+            caretValue.ValueKind == JsonValueKind.Number &&
+            caretValue.TryGetInt32(out var parsedCaret))
+            caretIndex = Math.Clamp(parsedCaret, 0, text.Length);
+        return true;
     }
 
     private static bool TryReadRunning(object? data, out bool running)
@@ -1060,21 +1302,11 @@ public partial class MainWindow : Window
         return true;
     }
 
-    private async Task InvokeZCodeAsync(string action, string pendingText)
-    {
-        ZCodePluginStatus.Text = pendingText;
-        try
-        {
-            if (action == "open") await _client.AllowForegroundAsync();
-            var result = await _client.InvokeAsync("mrc.zcode", action);
-            ZCodePluginStatus.Text = result.Message;
-            if (result.Success && action == "open") FlashPowerButton();
-        }
-        catch (Exception exception)
-        {
-            ZCodePluginStatus.Text = exception.Message;
-        }
-    }
+    private bool SelectedPluginSupportsPower =>
+        _loadedTargetPluginIds.Contains(_selectedPluginId) &&
+        _selectedTargetActions.Contains(TargetPluginActions.Status) &&
+        _selectedTargetActions.Contains(TargetPluginActions.Open) &&
+        _selectedTargetActions.Contains(TargetPluginActions.Close);
 
     private static void OpenPath(string path)
     {
@@ -1085,6 +1317,9 @@ public partial class MainWindow : Window
         else
             Process.Start("xdg-open", path);
     }
+
+    private sealed record TargetPluginView(string Id, string Name, string Version, HashSet<string> Actions);
+    private sealed record TargetActionRequest(string PluginId, string Action);
 
     private void MinimizeWindow(object? sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 

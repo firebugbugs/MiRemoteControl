@@ -32,12 +32,14 @@ static async Task RunAsync(Process owner)
 
     var selectedTargetPluginId = catalog.Descriptors
         .Where(plugin => plugin.Kind == PluginKinds.Target)
-        .OrderByDescending(plugin => string.Equals(plugin.Id, "mrc.zcode", StringComparison.OrdinalIgnoreCase))
+        .OrderBy(plugin => plugin.Name, StringComparer.CurrentCultureIgnoreCase)
+        .ThenBy(plugin => plugin.Id, StringComparer.OrdinalIgnoreCase)
         .Select(plugin => plugin.Id)
         .FirstOrDefault();
     var selectedRemotePluginId = catalog.Descriptors
         .Where(plugin => plugin.Kind == PluginKinds.Remote)
-        .OrderByDescending(plugin => string.Equals(plugin.Id, "mrc.remote.xiaomi", StringComparison.OrdinalIgnoreCase))
+        .OrderBy(plugin => plugin.Name, StringComparer.CurrentCultureIgnoreCase)
+        .ThenBy(plugin => plugin.Id, StringComparer.OrdinalIgnoreCase)
         .Select(plugin => plugin.Id)
         .FirstOrDefault();
 
@@ -180,7 +182,6 @@ static async Task RunAsync(Process owner)
             errors = catalog.Errors,
             remote = ReadProperty(state, "remote"),
             hidTap = ReadProperty(state, "hidTap"),
-            zcodeDraft = ReadProperty(state, "zcodeDraft"),
             remoteVoice = ReadProperty(state, "remoteVoice"),
             voice = ReadProperty(state, "voice"),
             latestVoice = ReadProperty(state, "latestVoice"),
@@ -308,10 +309,17 @@ static bool TryReadSinglePluginArgument(
     return true;
 }
 
-static JsonElement ReadProperty(JsonElement element, string name) =>
-    element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value)
-        ? value.Clone()
-        : default;
+static JsonElement ReadProperty(JsonElement element, string name)
+{
+    if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value))
+        return value.Clone();
+
+    // JsonElement's default value is Undefined, which cannot be serialized
+    // inside the aggregate core status payload. Optional plugin fields must be
+    // represented as JSON null instead, otherwise the whole UI status refresh
+    // fails and makes a connected remote appear offline.
+    return JsonSerializer.SerializeToElement<object?>(null, Wire.Json);
+}
 
 static bool IsLongRequest(CommandRequest request) =>
     (request.Plugin == "core" && request.Action == "voice.model.select") ||
@@ -354,7 +362,7 @@ internal sealed class HostPluginContext(
         // behind foreground-taking actions
         // (voice input holds the gate for seconds while typing) starved the
         // writers and made mirrored text lag a full utterance behind.
-        if (action is "input.probe" or "input.read")
+        if (action is "input.probe" or "input.read" or "input.watch")
             return await catalog.ExecuteAsync(
                 new CommandRequest("", pluginId, action, arguments),
                 linked.Token);

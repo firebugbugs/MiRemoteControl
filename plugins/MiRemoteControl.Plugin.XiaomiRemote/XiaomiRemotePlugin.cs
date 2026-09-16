@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using MiRemoteControl.Contracts;
 
@@ -21,19 +20,13 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
     private readonly object _remoteCommandSync = new();
     private readonly object _backRepeatSync = new();
     private CancellationTokenSource? _backRepeat;
-    // Ledger of the ZCode composer content as verified by our own writes:
-    // voice appends after a verified input, Back trims a character, Send
-    // clears. The fullscreen mirror displays this instead of polling the
-    // Electron accessibility tree, which never stayed in sync.
-    private readonly object _zcodeDraftSync = new();
-    private readonly StringBuilder _zcodeDraft = new();
     private DateTimeOffset _lastPhysicalPower = DateTimeOffset.MinValue;
     private DateTimeOffset _lastRemoteOk = DateTimeOffset.MinValue;
 
     public PluginDescriptor Descriptor { get; } = new(
         "mrc.remote.xiaomi",
         "小米蓝牙遥控器",
-        "1.0.4",
+        "1.0.9",
         [
             new("status", "状态", "读取遥控器、语音与模型状态"),
             new("buttons", "按键列表", "列出可模拟的遥控器按键"),
@@ -176,7 +169,8 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
 
         return action switch
         {
-            "status" => Status(remote, hidTap, voice, speech, remoteVoice, latestVoice),            "buttons" => CommandResult.Ok("可用的虚拟遥控器按键",
+            "status" => Status(remote, hidTap, voice, speech, remoteVoice, latestVoice),
+            "buttons" => CommandResult.Ok("可用的虚拟遥控器按键",
                 new { buttons = RemoteButtons.Supported, excluded = new[] { "Voice" }, selectedPlugin = host.SelectedTargetPluginId }),
             "press" => await PressRemoteAsync(arguments, remote, host, ct),
             "learnVoice" => LearnVoice(remote),
@@ -206,8 +200,6 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
         AtvvRemoteVoiceService remoteVoice,
         LatestVoiceRecordingService latestVoice)
     {
-        string zcodeDraft;
-        lock (_zcodeDraftSync) zcodeDraft = _zcodeDraft.ToString();
         return CommandResult.Ok("小米遥控器服务已就绪", new
         {
             remote = remote.Status(),
@@ -218,8 +210,7 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
             speechModel = speech.Status,
             whisper = speech.Status,
             voiceModels = speech.Models(),
-            audioDevices = voice.Devices(),
-            zcodeDraft
+            audioDevices = voice.Devices()
         });
     }
 
@@ -294,8 +285,7 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
             if (dispatch) _ = ExecuteSelectedPowerSafelyAsync(host, ct);
         }
         if (virtualInput) return;
-        if (string.Equals(host.SelectedTargetPluginId, "mrc.zcode", StringComparison.OrdinalIgnoreCase) &&
-            input.Button is "Back" or "Ok")
+        if (input.Button is "Back" or "Ok")
         {
             if (input.Button == "Back")
             {
@@ -337,17 +327,19 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
             string.Equals(plugin.Id, pluginId, StringComparison.OrdinalIgnoreCase));
         if (descriptor is null) return CommandResult.Fail("PluginNotFound", $"未找到当前工作插件：{pluginId}");
         var actions = descriptor.Actions.Select(action => action.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (!actions.Contains("status") || !actions.Contains("open") || !actions.Contains("close"))
+        if (!actions.Contains(TargetPluginActions.Status) ||
+            !actions.Contains(TargetPluginActions.Open) ||
+            !actions.Contains(TargetPluginActions.Close))
             return CommandResult.Fail("PowerUnsupported",
                 $"插件 {descriptor.Name} 未提供 status/open/close，不能使用电源键。");
 
-        var status = await host.ExecuteAsync(pluginId, "status", ct: ct);
+        var status = await host.ExecuteAsync(pluginId, TargetPluginActions.Status, ct: ct);
         if (!status.Success) return status;
         if (!TryReadBool(status.Data, "running", out var running))
             return CommandResult.Fail("InvalidPluginStatus", $"插件 {descriptor.Name} 的 status 未返回 running。");
         if (!TryReadBool(status.Data, "focused", out var focused))
             return CommandResult.Fail("InvalidPluginStatus", $"插件 {descriptor.Name} 的 status 未返回 focused。");
-        var action = running && focused ? "close" : "open";
+        var action = running && focused ? TargetPluginActions.Close : TargetPluginActions.Open;
         var result = await host.ExecuteAsync(pluginId, action, ct: ct);
         return result.Success
             ? CommandResult.Ok(result.Message,
@@ -386,8 +378,7 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
         var ct = repeater.Token;
         try
         {
-            var pluginId = host.SelectedTargetPluginId;
-            if (pluginId is null || !string.Equals(pluginId, "mrc.zcode", StringComparison.OrdinalIgnoreCase)) return;
+            if (!TryGetSelectedTarget(host, TargetPluginActions.Backspace, out var pluginId)) return;
             // Like a held keyboard BKSP: the first deletion fires immediately,
             // then after the initial delay it repeats at a steady rate for as
             // long as the key stays down.
@@ -413,22 +404,23 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
 
     private async Task DeleteOneAsync(IPluginHostContext host, string pluginId, CancellationToken ct)
     {
-        if ((await host.ExecuteAsync(pluginId, "backspace", ct: ct)) is { Success: true })
-            TrimZcodeDraft(1);
+        await host.ExecuteAsync(pluginId, TargetPluginActions.Backspace, ct: ct);
     }
 
     private async Task ExecuteSelectedCommandSafelyAsync(IPluginHostContext host, CancellationToken ct)
     {
         try
         {
-            var pluginId = host.SelectedTargetPluginId;
-            if (pluginId is null ||
-                !string.Equals(pluginId, "mrc.zcode", StringComparison.OrdinalIgnoreCase)) return;
-            var status = await host.ExecuteAsync(pluginId, "status", ct: ct);
+            if (!TryGetSelectedTarget(host, TargetPluginActions.Status, out var pluginId)) return;
+            var descriptor = FindPlugin(host, pluginId);
+            if (descriptor is null) return;
+            var actions = descriptor.Actions.Select(action => action.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var status = await host.ExecuteAsync(pluginId, TargetPluginActions.Status, ct: ct);
             if (!status.Success) return;
-            var action = TryReadBool(status.Data, "canStop", out var canStop) && canStop ? "stop" : "send";
-            if ((await host.ExecuteAsync(pluginId, action, ct: ct)).Success && action == "send")
-                ClearZcodeDraft();
+            var action = TryReadBool(status.Data, "canStop", out var canStop) && canStop && actions.Contains(TargetPluginActions.Stop)
+                ? TargetPluginActions.Stop
+                : actions.Contains(TargetPluginActions.Send) ? TargetPluginActions.Send : null;
+            if (action is not null) await host.ExecuteAsync(pluginId, action, ct: ct);
         }
         catch (Exception exception) { host.Log(Descriptor.Id, exception); }
     }
@@ -446,47 +438,28 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
         {
             if (!latestVoice.SavePcm(pcm))
                 host.Log(Descriptor.Id, new IOException(latestVoice.Status.LastError ?? latestVoice.Status.Message));
-            var pluginId = host.SelectedTargetPluginId;
-            var forwardsToZCode = pluginId is not null && !ct.IsCancellationRequested &&
-                                  string.Equals(pluginId, "mrc.zcode", StringComparison.OrdinalIgnoreCase);
-            if (!forwardsToZCode)
-            {
-                var plainText = await speech.RecognizePcmAsync(pcm);
-                if (string.IsNullOrWhiteSpace(plainText))
-                    plainText = await voice.RecognizePcmAsync(pcm, "小米遥控器 · ATVV");
-                remoteVoice.ReportRecognition(plainText, speech.Status.LastError ?? voice.Status().LastError);
-                return;
-            }
-
-            // Serialize the per-utterance ZCode traffic so a following
-            // utterance can never interleave its text with the previous round.
             var text = await speech.RecognizePcmAsync(pcm);
             if (string.IsNullOrWhiteSpace(text))
                 text = await voice.RecognizePcmAsync(pcm, "小米遥控器 · ATVV");
             remoteVoice.ReportRecognition(text, speech.Status.LastError ?? voice.Status().LastError);
             if (ct.IsCancellationRequested || string.IsNullOrWhiteSpace(text)) return;
-            var input = await host.ExecuteAsync(pluginId!, "input", new() { ["text"] = text }, ct);
-            if (input.Success)
-            {
-                lock (_zcodeDraftSync) _zcodeDraft.Append(text);
-            }
-            else VoiceDiagnostics.Log($"ZCODE-INPUT-FAIL {input.Code}: {input.Message}");
+            if (!TryGetSelectedTarget(host, TargetPluginActions.Input, out var pluginId)) return;
+            var input = await host.ExecuteAsync(pluginId, TargetPluginActions.Input, new() { ["text"] = text }, ct);
+            if (!input.Success) VoiceDiagnostics.Log($"TARGET-INPUT-FAIL plugin={pluginId} {input.Code}: {input.Message}");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception exception) { host.Log(Descriptor.Id, exception); }
     }
 
-    private void TrimZcodeDraft(int characters)
-    {
-        lock (_zcodeDraftSync)
-        {
-            if (_zcodeDraft.Length > 0) _zcodeDraft.Length -= Math.Min(characters, _zcodeDraft.Length);
-        }
-    }
+    private static PluginDescriptor? FindPlugin(IPluginHostContext host, string pluginId) =>
+        host.Plugins.FirstOrDefault(plugin => string.Equals(plugin.Id, pluginId, StringComparison.OrdinalIgnoreCase));
 
-    private void ClearZcodeDraft()
+    private static bool TryGetSelectedTarget(IPluginHostContext host, string requiredAction, out string pluginId)
     {
-        lock (_zcodeDraftSync) _zcodeDraft.Clear();
+        pluginId = host.SelectedTargetPluginId ?? "";
+        var descriptor = pluginId.Length == 0 ? null : FindPlugin(host, pluginId);
+        return descriptor?.Kind == PluginKinds.Target && descriptor.Actions.Any(action =>
+            string.Equals(action.Id, requiredAction, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool TryReadBool(object? data, string property, out bool value)

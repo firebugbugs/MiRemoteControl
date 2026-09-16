@@ -22,14 +22,16 @@ internal static class HidTapHelperHost
 {
     private const string FridaVersion = "17.15.3";
     private const string ArchiveName = "frida-gadget-17.15.3-windows-x86_64.dll.xz";
+    private const string ArchiveResourceName = "MiRemoteControl.Desktop.Infrastructure.Assets.frida-gadget-17.15.3-windows-x86_64.dll.xz";
     private const string ArchiveSha256 = "B566D70189B6D551AD8F4E0BEA24DE08A3D4C0F559BB35B2BDB67D45182240C2";
     private const string DllSha256 = "6FCA4007B2284C765A6C15C967A741F536B5865BF83867326A54029A3B752748";
     private const string GadgetDllName = "RemoteMicRC003HidTap.dll";
     private const string GadgetConfigName = "RemoteMicRC003HidTap.config";
     private const string GadgetScriptName = "rc003_hid_gadget.js";
     private const int HidTapPort = 30684;
-    private const string RemoteDevicePath = @"BTHLEDEVICE#VID&012717_PID&32B8#RC003";
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
+
+    private readonly record struct BluetoothHidHost(int ProcessId, string DeviceIdentity);
 
     public static bool TryParseArguments(string[] args, out HidTapHelperArguments arguments)
     {
@@ -41,10 +43,10 @@ internal static class HidTapHelperHost
                SetArguments(parentProcessId, args[2], out arguments);
     }
 
-    public static bool IsRc003Connected()
+    public static bool IsBluetoothHidRemoteConnected()
     {
         if (!OperatingSystem.IsWindows()) return false;
-        try { return FindRc003Host() is not null; }
+        try { return FindBluetoothHidHost() is not null; }
         catch { return false; }
     }
 
@@ -112,10 +114,10 @@ internal static class HidTapHelperHost
         var waitingForRemote = false;
         while (!cancellationToken.IsCancellationRequested)
         {
-            var target = FindRc003Host();
+            var target = FindBluetoothHidHost();
             if (target is null)
             {
-                if (!waitingForRemote) WriteLog("等待已连接的 Xiaomi RC003。");
+                if (!waitingForRemote) WriteLog("等待已连接的 Bluetooth HID 遥控器。");
                 waitingForRemote = true;
                 await Task.Delay(RetryDelay, cancellationToken);
                 continue;
@@ -128,21 +130,22 @@ internal static class HidTapHelperHost
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
             catch (Exception exception)
             {
-                WriteLog($"RC003 捕获失败（WUDFHost {target.Value}）：{exception.Message}");
+                WriteLog($"Bluetooth HID 捕获失败（WUDFHost {target.Value.ProcessId}）：{exception.Message}");
                 await Task.Delay(RetryDelay, cancellationToken);
             }
         }
     }
 
     [SupportedOSPlatform("windows")]
-    private static async Task CaptureFromHostAsync(int targetProcessId, string runtimeDll, CancellationToken cancellationToken)
+    private static async Task CaptureFromHostAsync(BluetoothHidHost target, string runtimeDll, CancellationToken cancellationToken)
     {
+        var targetProcessId = target.ProcessId;
         using var listener = new TcpListener(IPAddress.Loopback, HidTapPort);
         listener.Start(1);
 
         VerifyWudfHost(targetProcessId);
         InjectLibrary(targetProcessId, runtimeDll);
-        WriteLog($"已按开源成品方案加载 RC003 HID tap，等待 WUDFHost {targetProcessId} 回连 127.0.0.1:{HidTapPort}。");
+        WriteLog($"已加载 Bluetooth HID tap，等待 WUDFHost {targetProcessId} 回连 127.0.0.1:{HidTapPort}。");
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(90));
@@ -172,11 +175,11 @@ internal static class HidTapHelperHost
                 var line = await reader.ReadLineAsync(cancellationToken);
                 if (line is null) break;
                 if (!TryReadReport(line, out var reportHex)) continue;
-                WriteLog($"捕获 RC003 HID 报告：{DescribeReport(reportHex)} raw={reportHex}");
+                WriteLog($"捕获 Bluetooth HID 报告：{DescribeReport(reportHex)} raw={reportHex}");
                 pipe = await EnsurePipeAsync(pipe, cancellationToken);
                 try
                 {
-                    await Wire.WriteAsync(pipe, new HidTapFrame(++sequence, RemoteDevicePath, reportHex), cancellationToken);
+                    await Wire.WriteAsync(pipe, new HidTapFrame(++sequence, target.DeviceIdentity, reportHex), cancellationToken);
                 }
                 catch (IOException)
                 {
@@ -245,17 +248,16 @@ internal static class HidTapHelperHost
     }
 
     [SupportedOSPlatform("windows")]
-    private static int? FindRc003Host()
+    private static BluetoothHidHost? FindBluetoothHidHost()
     {
         const string registryPath = @"SYSTEM\CurrentControlSet\Enum\BTHLEDevice";
         using var root = Registry.LocalMachine.OpenSubKey(registryPath);
         if (root is null) return null;
-        var matches = new HashSet<int>();
+        var matches = new List<BluetoothHidHost>();
         foreach (var serviceName in root.GetSubKeyNames())
         {
             var lower = serviceName.ToLowerInvariant();
-            if (!lower.StartsWith("{00001812-0000-1000-8000-00805f9b34fb}", StringComparison.Ordinal) ||
-                !lower.Contains("dev_vid&012717_pid&32b8_", StringComparison.Ordinal)) continue;
+            if (!lower.StartsWith("{00001812-0000-1000-8000-00805f9b34fb}", StringComparison.Ordinal)) continue;
             using var service = root.OpenSubKey(serviceName);
             if (service is null) continue;
             foreach (var instanceName in service.GetSubKeyNames())
@@ -269,10 +271,13 @@ internal static class HidTapHelperHost
                     long signed when signed is > 0 and <= int.MaxValue => (int)signed,
                     _ => 0
                 };
-                if (pid > 0) matches.Add(pid);
+                if (pid > 0) matches.Add(new BluetoothHidHost(pid, $"HID-TAP:{serviceName}"));
             }
         }
-        return matches.Count == 1 ? matches.Single() : null;
+        return matches
+            .DistinctBy(match => match.ProcessId)
+            .OrderBy(match => match.ProcessId)
+            .FirstOrDefault() is { ProcessId: > 0 } match ? match : null;
     }
 
     [SupportedOSPlatform("windows")]
@@ -286,21 +291,20 @@ internal static class HidTapHelperHost
 
         if (!File.Exists(archivePath) || HashFile(archivePath) != ArchiveSha256)
         {
-            var temporaryPath = archivePath + ".download";
+            var temporaryPath = archivePath + ".extracting";
             try
             {
-                using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
-                await using var source = await http.GetStreamAsync(
-                    $"https://github.com/frida/frida/releases/download/{FridaVersion}/{ArchiveName}", cancellationToken);
+                await using var source = Assembly.GetExecutingAssembly().GetManifestResourceStream(ArchiveResourceName)
+                    ?? throw new InvalidOperationException("找不到内置的增强按键运行时。");
                 await using (var destination = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None))
                     await source.CopyToAsync(destination, cancellationToken);
                 if (HashFile(temporaryPath) != ArchiveSha256)
-                    throw new InvalidDataException("Frida Gadget 压缩包校验失败。");
+                    throw new InvalidDataException("内置增强按键运行时校验失败。");
                 File.Move(temporaryPath, archivePath, true);
             }
             finally
             {
-                try { File.Delete(archivePath + ".download"); } catch { }
+                try { File.Delete(temporaryPath); } catch { }
             }
         }
 
@@ -385,7 +389,7 @@ internal static class HidTapHelperHost
         var alternate = Path.Combine(systemDirectory, "WUDF", "WUDFHost.exe");
         if (!string.Equals(path, expected, StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(path, alternate, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("RC003 驱动宿主身份验证失败。");
+            throw new InvalidOperationException("Bluetooth HID 驱动宿主身份验证失败。");
     }
 
     private static void InjectLibrary(int processId, string libraryPath)

@@ -11,9 +11,38 @@ public record CommandResult(bool Success, string Code, string Message, object? D
 public record CommandResponse(string Id, CommandResult Result);
 public record HidTapFrame(long Sequence, string DevicePath, string ReportHex);
 public record ActionDescriptor(string Id, string Name, string Description);
-public record InputProbeSnapshot(bool Available, string Text, long Revision, DateTimeOffset CapturedAt, string Source);
+public record InputProbeSnapshot(
+    bool Available,
+    string Text,
+    long Revision,
+    DateTimeOffset CapturedAt,
+    string Source,
+    int? CaretIndex = null);
+public record TargetPluginStatus(
+    bool Running,
+    bool Focused,
+    bool CanSend = false,
+    bool CanStop = false,
+    object? Details = null);
 public static class TargetPluginActions
 {
+    public const string Status = "status";
+    public const string Open = "open";
+    public const string Close = "close";
+    public const string Input = "input";
+    public const string Backspace = "backspace";
+    public const string InputFocus = "input.focus";
+    /// <summary>Waits until the target editor text changes and returns its complete value.</summary>
+    public const string InputWatch = "input.watch";
+    /// <summary>Replaces the complete target editor value, including replacing it with an empty string.</summary>
+    public const string InputReplace = "input.replace";
+    /// <summary>Inserts or deletes at the target editor's current caret.</summary>
+    public const string InputEdit = "input.edit";
+    /// <summary>Moves the editing caret without changing the input text.</summary>
+    public const string CursorMove = "cursor.move";
+    public const string Send = "send";
+    public const string Stop = "stop";
+
     /// <summary>
     /// Standard read-only target action used by mirrors and accessibility
     /// clients to obtain the target application's actual input contents.
