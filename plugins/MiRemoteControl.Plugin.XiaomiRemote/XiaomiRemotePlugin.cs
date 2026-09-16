@@ -3,10 +3,10 @@ using MiRemoteControl.Contracts;
 
 namespace MiRemoteControl.Plugin.XiaomiRemote;
 
-public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IHostedHarnessPlugin
+public sealed class XiaomiRemotePlugin : IRemotePlugin, IAsyncRemotePlugin, IHostedRemotePlugin
 {
     private readonly object _lifecycle = new();
-    private IPluginHostContext? _host;
+    private IRemotePluginHostContext? _host;
     private CancellationTokenSource? _shutdown;
     private RemoteSettingsStore? _settingsStore;
     private RemoteSettings? _settings;
@@ -26,7 +26,7 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
     public PluginDescriptor Descriptor { get; } = new(
         "mrc.remote.xiaomi",
         "小米蓝牙遥控器",
-        "1.0.9",
+        "1.1.0",
         [
             new("status", "状态", "读取遥控器、语音与模型状态"),
             new("buttons", "按键列表", "列出可模拟的遥控器按键"),
@@ -49,7 +49,7 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
         ],
         PluginKinds.Remote);
 
-    public void Start(IPluginHostContext context)
+    public void Start(IRemotePluginHostContext context)
     {
         lock (_lifecycle)
         {
@@ -248,7 +248,7 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
     private async Task<CommandResult> PressRemoteAsync(
         IReadOnlyDictionary<string, string> arguments,
         RemoteInputMonitor remote,
-        IPluginHostContext host,
+        IRemotePluginHostContext host,
         CancellationToken ct)
     {
         if (arguments.Count != 1 || !arguments.TryGetValue("button", out var requested) ||
@@ -264,7 +264,7 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
 
     private void HandleRemoteInput(
         RemoteInputEvent input,
-        IPluginHostContext host,
+        IRemotePluginHostContext host,
         RemoteInputMonitor remote,
         AtvvRemoteVoiceService remoteVoice,
         CancellationToken ct)
@@ -312,13 +312,13 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
         _ = remote.IsVoiceKey(input.Key);
     }
 
-    private async Task ExecuteSelectedPowerSafelyAsync(IPluginHostContext host, CancellationToken ct)
+    private async Task ExecuteSelectedPowerSafelyAsync(IRemotePluginHostContext host, CancellationToken ct)
     {
         try { await ExecuteSelectedPowerAsync(host, ct); }
         catch (Exception exception) { host.Log(Descriptor.Id, exception); }
     }
 
-    private async Task<CommandResult> ExecuteSelectedPowerAsync(IPluginHostContext host, CancellationToken ct)
+    private async Task<CommandResult> ExecuteSelectedPowerAsync(IRemotePluginHostContext host, CancellationToken ct)
     {
         var pluginId = host.SelectedTargetPluginId;
         if (string.IsNullOrWhiteSpace(pluginId))
@@ -327,19 +327,19 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
             string.Equals(plugin.Id, pluginId, StringComparison.OrdinalIgnoreCase));
         if (descriptor is null) return CommandResult.Fail("PluginNotFound", $"未找到当前工作插件：{pluginId}");
         var actions = descriptor.Actions.Select(action => action.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (!actions.Contains(TargetPluginActions.Status) ||
-            !actions.Contains(TargetPluginActions.Open) ||
-            !actions.Contains(TargetPluginActions.Close))
+        if (!actions.Contains(HarnessPluginActions.Status) ||
+            !actions.Contains(HarnessPluginActions.Open) ||
+            !actions.Contains(HarnessPluginActions.Close))
             return CommandResult.Fail("PowerUnsupported",
                 $"插件 {descriptor.Name} 未提供 status/open/close，不能使用电源键。");
 
-        var status = await host.ExecuteAsync(pluginId, TargetPluginActions.Status, ct: ct);
+        var status = await host.ExecuteAsync(pluginId, HarnessPluginActions.Status, ct: ct);
         if (!status.Success) return status;
         if (!TryReadBool(status.Data, "running", out var running))
             return CommandResult.Fail("InvalidPluginStatus", $"插件 {descriptor.Name} 的 status 未返回 running。");
         if (!TryReadBool(status.Data, "focused", out var focused))
             return CommandResult.Fail("InvalidPluginStatus", $"插件 {descriptor.Name} 的 status 未返回 focused。");
-        var action = running && focused ? TargetPluginActions.Close : TargetPluginActions.Open;
+        var action = running && focused ? HarnessPluginActions.Close : HarnessPluginActions.Open;
         var result = await host.ExecuteAsync(pluginId, action, ct: ct);
         return result.Success
             ? CommandResult.Ok(result.Message,
@@ -355,7 +355,7 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
             : result;
     }
 
-    private void HandleBackKey(bool isDown, IPluginHostContext host, CancellationToken ct)
+    private void HandleBackKey(bool isDown, IRemotePluginHostContext host, CancellationToken ct)
     {
         CancellationTokenSource? repeater = null;
         lock (_backRepeatSync)
@@ -373,12 +373,12 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
         _ = RepeatBackspaceAsync(host, repeater);
     }
 
-    private async Task RepeatBackspaceAsync(IPluginHostContext host, CancellationTokenSource repeater)
+    private async Task RepeatBackspaceAsync(IRemotePluginHostContext host, CancellationTokenSource repeater)
     {
         var ct = repeater.Token;
         try
         {
-            if (!TryGetSelectedTarget(host, TargetPluginActions.Backspace, out var pluginId)) return;
+            if (!TryGetSelectedTarget(host, HarnessPluginActions.Backspace, out var pluginId)) return;
             // Like a held keyboard BKSP: the first deletion fires immediately,
             // then after the initial delay it repeats at a steady rate for as
             // long as the key stays down.
@@ -402,24 +402,24 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
         }
     }
 
-    private async Task DeleteOneAsync(IPluginHostContext host, string pluginId, CancellationToken ct)
+    private async Task DeleteOneAsync(IRemotePluginHostContext host, string pluginId, CancellationToken ct)
     {
-        await host.ExecuteAsync(pluginId, TargetPluginActions.Backspace, ct: ct);
+        await host.ExecuteAsync(pluginId, HarnessPluginActions.Backspace, ct: ct);
     }
 
-    private async Task ExecuteSelectedCommandSafelyAsync(IPluginHostContext host, CancellationToken ct)
+    private async Task ExecuteSelectedCommandSafelyAsync(IRemotePluginHostContext host, CancellationToken ct)
     {
         try
         {
-            if (!TryGetSelectedTarget(host, TargetPluginActions.Status, out var pluginId)) return;
+            if (!TryGetSelectedTarget(host, HarnessPluginActions.Status, out var pluginId)) return;
             var descriptor = FindPlugin(host, pluginId);
             if (descriptor is null) return;
             var actions = descriptor.Actions.Select(action => action.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var status = await host.ExecuteAsync(pluginId, TargetPluginActions.Status, ct: ct);
+            var status = await host.ExecuteAsync(pluginId, HarnessPluginActions.Status, ct: ct);
             if (!status.Success) return;
-            var action = TryReadBool(status.Data, "canStop", out var canStop) && canStop && actions.Contains(TargetPluginActions.Stop)
-                ? TargetPluginActions.Stop
-                : actions.Contains(TargetPluginActions.Send) ? TargetPluginActions.Send : null;
+            var action = TryReadBool(status.Data, "canStop", out var canStop) && canStop && actions.Contains(HarnessPluginActions.Stop)
+                ? HarnessPluginActions.Stop
+                : actions.Contains(HarnessPluginActions.Send) ? HarnessPluginActions.Send : null;
             if (action is not null) await host.ExecuteAsync(pluginId, action, ct: ct);
         }
         catch (Exception exception) { host.Log(Descriptor.Id, exception); }
@@ -427,7 +427,7 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
 
     private async Task RecognizeRemoteSpeechSafelyAsync(
         byte[] pcm,
-        IPluginHostContext host,
+        IRemotePluginHostContext host,
         VoiceInputService voice,
         WhisperVoiceService speech,
         AtvvRemoteVoiceService remoteVoice,
@@ -443,18 +443,18 @@ public sealed class XiaomiRemotePlugin : IHarnessPlugin, IAsyncHarnessPlugin, IH
                 text = await voice.RecognizePcmAsync(pcm, "小米遥控器 · ATVV");
             remoteVoice.ReportRecognition(text, speech.Status.LastError ?? voice.Status().LastError);
             if (ct.IsCancellationRequested || string.IsNullOrWhiteSpace(text)) return;
-            if (!TryGetSelectedTarget(host, TargetPluginActions.Input, out var pluginId)) return;
-            var input = await host.ExecuteAsync(pluginId, TargetPluginActions.Input, new() { ["text"] = text }, ct);
+            if (!TryGetSelectedTarget(host, HarnessPluginActions.Input, out var pluginId)) return;
+            var input = await host.ExecuteAsync(pluginId, HarnessPluginActions.Input, new() { ["text"] = text }, ct);
             if (!input.Success) VoiceDiagnostics.Log($"TARGET-INPUT-FAIL plugin={pluginId} {input.Code}: {input.Message}");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception exception) { host.Log(Descriptor.Id, exception); }
     }
 
-    private static PluginDescriptor? FindPlugin(IPluginHostContext host, string pluginId) =>
+    private static PluginDescriptor? FindPlugin(IRemotePluginHostContext host, string pluginId) =>
         host.Plugins.FirstOrDefault(plugin => string.Equals(plugin.Id, pluginId, StringComparison.OrdinalIgnoreCase));
 
-    private static bool TryGetSelectedTarget(IPluginHostContext host, string requiredAction, out string pluginId)
+    private static bool TryGetSelectedTarget(IRemotePluginHostContext host, string requiredAction, out string pluginId)
     {
         pluginId = host.SelectedTargetPluginId ?? "";
         var descriptor = pluginId.Length == 0 ? null : FindPlugin(host, pluginId);

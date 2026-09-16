@@ -345,10 +345,10 @@ internal sealed class HostPluginContext(
     PluginCatalog catalog,
     SemaphoreSlim targetGate,
     Func<string?> selectedTarget,
-    CancellationToken hostShutdown) : IPluginHostContext
+    CancellationToken hostShutdown) : IRemotePluginHostContext
 {
     public string? SelectedTargetPluginId => selectedTarget();
-    public IReadOnlyList<PluginDescriptor> Plugins => catalog.Descriptors;
+    public IReadOnlyList<PluginDescriptor> Plugins => catalog.Descriptors.Where(p => p.Kind == PluginKinds.Target).ToArray();
 
     public async Task<CommandResult> ExecuteAsync(
         string pluginId,
@@ -356,6 +356,8 @@ internal sealed class HostPluginContext(
         Dictionary<string, string>? arguments = null,
         CancellationToken ct = default)
     {
+        if (!Plugins.Any(p => string.Equals(p.Id, pluginId, StringComparison.OrdinalIgnoreCase)))
+            return CommandResult.Fail("HarnessNotFound", "遥控器宿主上下文只能调用 Harness 插件。");
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, hostShutdown);
         // Standard input probes (and the legacy input.read action) are passive
         // UIA reads polled continuously by fullscreen mirrors. Serializing them

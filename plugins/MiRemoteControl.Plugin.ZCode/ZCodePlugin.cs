@@ -10,8 +10,11 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
     private static readonly string[] ComposerNames = ["向 ZCode 提问", "提出后续修改要求", "继续输入以排队后续修改", "Ask ZCode anything", "Ask for follow-up changes", "Keep typing to queue follow-up changes"];
     private static readonly string[] ConfirmationHints = ["使用 Tab / 上下键选择", "Use Tab / arrow keys to choose"];
     private readonly object _inputProbeSync = new();
+    private string? _mirrorText;
+    private int? _mirrorCaret;
     private string? _lastProbedText;
     private int? _lastProbedCaretIndex;
+    private string _lastProbeSource = "uia";
     private string? _lastVerifiedInputText;
     private string _lastVerifiedInputSource = "write-verification";
     private readonly HashSet<ulong> _supersededProbeHashes = [];
@@ -20,35 +23,15 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
     private CancellationTokenSource? _inputWatcherCancellation;
     private Task? _inputWatcherTask;
     private TaskCompletionSource<long> _inputChanged = NewInputChangedSignal();
-    public PluginDescriptor Descriptor { get; } = new("mrc.zcode", "ZCode 控制", "0.3.1", [
-        new("open", "打开", "启动或恢复 ZCode 并显示在前台"),
-        new("close", "关闭窗口", "相当于右上角关闭，不强杀进程"),
-        new("input", "输入内容", "向当前页面输入框追加文本；replace=true 替换"),
-        new(TargetPluginActions.InputFocus, "聚焦输入框", "聚焦当前页面输入框但不修改内容"),
-        new(TargetPluginActions.InputWatch, "监听输入", "输入框文本变化时返回完整文本快照"),
-        new(TargetPluginActions.InputReplace, "覆盖输入", "清空输入框后写入完整文本；空文本表示全部删除"),
-        new(TargetPluginActions.InputEdit, "光标编辑", "在当前光标位置插入文本或向前/向后删除"),
-        new("input.read", "读取输入", "读取当前输入框中的完整文本"),
-        new(TargetPluginActions.InputProbe, "输入探针", "读取实际输入框内容及单调递增的内容版本"),
-        new("backspace", "删除字符", "删除当前输入框光标前的一个字符"),
-        new(TargetPluginActions.CursorMove, "移动光标", "按方向移动当前输入框的光标；direction=up/down/left/right"),
-        new("send", "发送", "点击当前页面发送按钮"),
-        new("stop", "停止任务", "点击当前页面停止生成按钮"),
-        new("confirm.up", "上一个选项", "在当前确认卡片向上切换"),
-        new("confirm.down", "下一个选项", "在当前确认卡片向下切换"),
-        new("confirm.select", "选择当前项", "选择当前确认项，权限卡片会确认该选择"),
-        new("confirm.submit", "提交确认", "点击卡片的确认/提交/继续按钮"),
-        new("confirm.status", "确认信息", "读取当前确认卡片和选项"),
-        new("status", "状态", "读取可见窗口及当前可用操作"),
-        new("inspect", "诊断", "读取可见 UIA 控件，可能包含页面文本")
-    ], PluginKinds.Target);
+    public PluginDescriptor Descriptor { get; } = new("mrc.zcode", "ZCode 控制", "0.4.0",
+        HarnessPluginActions.DefaultActions, PluginKinds.Target);
 
     public async Task<CommandResult> ExecuteAsync(
         string action,
         IReadOnlyDictionary<string, string> arguments,
         CancellationToken ct)
     {
-        if (action == TargetPluginActions.InputWatch)
+        if (action == HarnessPluginActions.InputWatch)
             return await WatchInputAsync(arguments, ct);
         return await Task.Run(() => Execute(action, arguments), ct);
     }
@@ -59,9 +42,9 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
         {
             if (!Descriptor.Actions.Any(a => a.Id == action)) return CommandResult.Fail("UnknownAction", "未知 ZCode 操作。");
             foreach (var key in arguments.Keys)
-                if (key is not ("exe" or "window" or "text" or "replace" or "direction" or "delete" or "afterRevision" or "timeoutMs"))
+                if (key is not ("exe" or "window" or "text" or "replace" or "direction" or "delete" or "active" or "caret" or "caretOnly" or "afterRevision" or "timeoutMs"))
                     return CommandResult.Fail("InvalidArgument", $"未知参数：{key}");
-            if (action == TargetPluginActions.InputWatch)
+            if (action == HarnessPluginActions.InputWatch)
                 return CommandResult.Fail("AsyncRequired", "input.watch 必须通过异步插件接口调用。");
             var exe = ResolveExecutable(arguments);
             var windows = NativeWindow.Find(exe);
@@ -83,6 +66,7 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
             var root = AutomationElement.FromHandle(target.Handle);
             if (action == "input.read")
             {
+                if (TryReadMirror(out var mirrorRead)) return mirrorRead;
                 // Polled continuously by the fullscreen mirror: a provider-side
                 // filtered lookup instead of the full-tree cached walk below.
                 // The 3000-element scan per poll kept ZCode busy and delayed
@@ -92,8 +76,9 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
                     return CommandResult.Fail("ComposerNotFound", "当前页面没有可读取的输入框。");
                 return CommandResult.Ok("已读取输入框内容。", new { text = ReadText(composer) ?? string.Empty });
             }
-            if (action == TargetPluginActions.InputProbe)
+            if (action == HarnessPluginActions.InputProbe)
             {
+                if (TryReadMirror(out var mirrorProbe)) return mirrorProbe;
                 // Do not query Electron's accessibility provider while the
                 // same contenteditable is processing a voice write. Those
                 // concurrent reads made DocumentRange settle one edit late.
@@ -104,28 +89,40 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
                 var text = ReadProbeText(composer);
                 return PublishInputProbe(text, caretIndex: ReadCaretIndex(composer, text));
             }
-            if (action == TargetPluginActions.InputFocus)
+            if (action == HarnessPluginActions.InputFocus)
             {
+                if (IsMirrorActive()) return MirrorOwnsInput("聚焦真实输入框");
                 var composer = FindComposerFast(root);
                 if (composer is null)
                     return CommandResult.Fail("ComposerNotFound", "当前页面没有可聚焦的输入框。");
                 FocusComposerStable(target, composer, 2);
                 return CommandResult.Ok("输入框已聚焦。", new { state = "Focused" });
             }
-            if (action == TargetPluginActions.InputReplace)
+            if (action == HarnessPluginActions.InputMirror)
             {
+                BeginInputWrite();
+                try { return SetMirrorMode(target, root, arguments); }
+                finally { EndInputWrite(); }
+            }
+            if (action == HarnessPluginActions.InputReplace)
+            {
+                // While a mirror owns the draft this is a pure in-memory
+                // update: the real editor must not be touched.
+                if (IsMirrorActive()) return ReplaceMirrorDraft(target, root, arguments);
                 BeginInputWrite();
                 try { return ReplaceInput(target, root, arguments); }
                 finally { EndInputWrite(); }
             }
-            if (action == TargetPluginActions.InputEdit)
+            if (action == HarnessPluginActions.InputEdit)
             {
+                if (IsMirrorActive()) return MirrorOwnsInput("光标编辑");
                 BeginInputWrite();
                 try { return EditInputAtCaret(target, root, arguments); }
                 finally { EndInputWrite(); }
             }
             if (action == "backspace")
             {
+                if (IsMirrorActive()) return MirrorOwnsInput("删除");
                 // Key-repeat traffic uses the last complete probe snapshot as
                 // its deterministic baseline. Chromium does perform the edit
                 // while occluded, but its UIA tree keeps exposing the longer
@@ -145,8 +142,9 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
                 PublishInputProbe(expected, authoritative: true, sourceOverride: "backspace-dispatch", caretIndex: expectedCaret);
                 return CommandResult.Ok("已删除输入框中的一个字符。", new { state = "Dispatched", text = expected });
             }
-            if (action == TargetPluginActions.CursorMove)
+            if (action == HarnessPluginActions.CursorMove)
             {
+                if (IsMirrorActive()) return MirrorOwnsInput("光标移动");
                 if (!arguments.TryGetValue("direction", out var direction) || !TryGetCursorKey(direction, out var key))
                     return CommandResult.Fail("InvalidArgument", "cursor.move 需要 direction=up/down/left/right。");
                 var composer = FindComposerFast(root);
@@ -158,6 +156,9 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
             }
             if (action == "input")
             {
+                // Voice traffic lands in the mirror draft while the big screen
+                // owns editing, so it never needs the composer's focus.
+                if (IsMirrorActive()) return AppendMirrorDraft(target, root, arguments);
                 // Voice traffic types at conversational pace; per-utterance
                 // full-tree scans added seconds of latency, so typing actions
                 // resolve the composer through the provider-filtered lookup.
@@ -197,6 +198,14 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
             switch (action)
             {
                 case "send":
+                    if (IsMirrorActive())
+                    {
+                        // Commit the big screen draft first so the page sends
+                        // exactly what the mirror shows, then keep it empty.
+                        var commit = CommitMirror(target, root);
+                        if (!commit.Success) return commit;
+                        lock (_inputProbeSync) _mirrorText = string.Empty;
+                    }
                     InvokeUnique(target, Buttons(elements, ["发送", "Send", "加入队列", "Queue"]), "SendUnavailable", "当前页面没有可用的发送按钮。");
                     PublishInputProbe(string.Empty, authoritative: true, sourceOverride: "send");
                     return CommandResult.Ok("已调用当前页面发送按钮。", new { state = "Dispatched" });
@@ -289,7 +298,10 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
         {
             try
             {
-                NativeWindow.Key(target, replace ? (ushort)0x41 : (ushort)0x23, 0x11); // Ctrl+A / Ctrl+End
+                // Voice input must land where the caret already is: only the
+                // replace path selects the whole value (Ctrl+A); the append
+                // path leaves the caret untouched instead of jumping to the end.
+                if (replace) NativeWindow.Key(target, 0x41, 0x11); // Ctrl+A
                 break;
             }
             catch (ControlException exception) when (
@@ -492,7 +504,7 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
         while (!ct.IsCancellationRequested)
         {
             var canRead = false;
-            lock (_inputProbeSync) canRead = _inputWriteInProgress == 0;
+            lock (_inputProbeSync) canRead = _inputWriteInProgress == 0 && _mirrorText is null;
             if (canRead)
             {
                 try
@@ -525,7 +537,10 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
             _lastProbedText ?? string.Empty,
             _inputProbeRevision,
             DateTimeOffset.UtcNow,
-            "watch",
+            // Report the source of the last publish instead of a generic
+            // "watch": the big screen needs to know whether the caret belongs
+            // to an insertion (voice) or to its own navigation.
+            _lastProbeSource,
             _lastProbedCaretIndex);
         return CommandResult.Ok(message, snapshot);
     }
@@ -656,11 +671,224 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
                 _inputChanged = NewInputChangedSignal();
             }
             _lastProbedCaretIndex = normalizedCaret;
+            // Remembered for long-poll answers: they must report where the last
+            // value came from, not a generic "watch".
+            _lastProbeSource = source;
             snapshot = new(true, text, _inputProbeRevision, DateTimeOffset.UtcNow, source, _lastProbedCaretIndex);
         }
         changedSignal?.TrySetResult(snapshot.Revision);
         return CommandResult.Ok("输入探针已采样。", snapshot);
     }
+    // ---- TV mirror (big screen) ownership ------------------------------
+    // While a mirror is active the draft lives in memory here. The real
+    // editor keeps whatever it had, nothing steals the foreground, and the
+    // draft is committed in one operation on demand.
+    private bool IsMirrorActive()
+    {
+        lock (_inputProbeSync) return _mirrorText is not null;
+    }
+
+    private static CommandResult MirrorOwnsInput(string operation) =>
+        CommandResult.Fail("MirrorOwnsInput", $"TV 大屏正在接管编辑，{operation}由大屏处理。");
+
+    private static string? NormalizeMirrorText(string text) =>
+        text.Length <= 20000 && !text.Any(c => char.IsControl(c) && c is not ('\n' or '\r' or '\t'))
+            ? text
+            : null;
+
+    private bool TryReadMirror(out CommandResult result)
+    {
+        lock (_inputProbeSync)
+        {
+            if (_mirrorText is null)
+            {
+                result = default!;
+                return false;
+            }
+            // Mirror traffic never reaches Electron, so answer from memory
+            // instead of polling the occluded, throttled provider.
+            result = PublishInputProbe(_mirrorText, caretIndex: _mirrorCaret);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Reads an optional caret position supplied by the mirror so inserted
+    /// text (voice) lands where the big screen's caret is, not at the end.
+    /// </summary>
+    private static int ReadMirrorCaret(IReadOnlyDictionary<string, string> args, int length) =>
+        args.TryGetValue("caret", out var caretValue) && int.TryParse(caretValue, out var caret)
+            ? Math.Clamp(caret, 0, length)
+            : length;
+
+    private CommandResult AppendMirrorDraft(
+        WindowTarget target,
+        AutomationElement root,
+        IReadOnlyDictionary<string, string> args)
+    {
+        if (!args.TryGetValue("text", out var text))
+            return CommandResult.Fail("InvalidArgument", "input 需要 text。");
+        var normalized = NormalizeMirrorText(text);
+        if (normalized is null)
+            return CommandResult.Fail("InvalidText", "文本上限 20000 字符，且不允许换行以外的控制字符。");
+        string draft;
+        int caretAfter;
+        lock (_inputProbeSync)
+        {
+            var current = _mirrorText ?? string.Empty;
+            // Voice input follows the big screen's caret instead of always
+            // appending, so a draft edited in the middle stays coherent.
+            var caret = Math.Clamp(_mirrorCaret ?? current.Length, 0, current.Length);
+            draft = current.Insert(caret, normalized);
+            if (draft.Length > 20000) return CommandResult.Fail("InvalidText", "TV 大屏草稿上限 20000 字符。");
+            caretAfter = caret + normalized.Length;
+            _mirrorText = draft;
+            _mirrorCaret = caretAfter;
+        }
+        // Voice lands in the real editor immediately too, so its content is
+        // never stale while the big screen stays open.
+        return SyncMirrorToEditor(target, root, draft, caretAfter, "mirror-append",
+            "已把文本插入 TV 大屏并同步到输入框。");
+    }
+
+    private CommandResult ReplaceMirrorDraft(
+        WindowTarget target,
+        AutomationElement root,
+        IReadOnlyDictionary<string, string> args)
+    {
+        // Pure navigation on the big screen: only the mirrored caret moves,
+        // so neither the draft text nor the real editor is touched.
+        if (args.TryGetValue("caretOnly", out var caretOnlyValue) &&
+            bool.TryParse(caretOnlyValue, out var caretOnly) && caretOnly)
+        {
+            string current;
+            int caretOnlyIndex;
+            lock (_inputProbeSync)
+            {
+                current = _mirrorText ?? string.Empty;
+                caretOnlyIndex = ReadMirrorCaret(args, current.Length);
+                _mirrorCaret = caretOnlyIndex;
+            }
+            var moved = PublishInputProbe(current, authoritative: true, sourceOverride: "mirror-caret", caretIndex: caretOnlyIndex);
+            return CommandResult.Ok("已同步 TV 大屏光标位置。", moved.Data);
+        }
+        if (!args.TryGetValue("text", out var text))
+            return CommandResult.Fail("InvalidArgument", "input.replace 需要 text；传入空字符串会清空输入框。");
+        var normalized = NormalizeMirrorText(text);
+        if (normalized is null)
+            return CommandResult.Fail("InvalidText", "文本上限 20000 字符，且不允许制表、换行以外的控制字符。");
+        var caret = ReadMirrorCaret(args, normalized.Length);
+        bool changed;
+        lock (_inputProbeSync)
+        {
+            changed = !string.Equals(_mirrorText, normalized, StringComparison.Ordinal);
+            _mirrorText = normalized;
+            _mirrorCaret = caret;
+        }
+        // Caret-only traffic (navigation on the big screen) must not touch the
+        // real editor; a real text change is pushed through right away.
+        if (!changed)
+        {
+            var idle = PublishInputProbe(normalized, authoritative: true, sourceOverride: "mirror-caret", caretIndex: caret);
+            return CommandResult.Ok("已同步 TV 大屏光标位置。", idle.Data);
+        }
+        return SyncMirrorToEditor(target, root, normalized, caret, "mirror-replace",
+            "已更新 TV 大屏内容并同步到输入框。");
+    }
+
+    /// <summary>
+    /// Pushes the mirrored draft into the real editor, then republishes the
+    /// probe with the mirror's caret. The focused write is skipped when the
+    /// editor already holds exactly that text.
+    /// </summary>
+    private CommandResult SyncMirrorToEditor(
+        WindowTarget target,
+        AutomationElement root,
+        string draft,
+        int caret,
+        string source,
+        string message)
+    {
+        var write = CommitMirror(target, root);
+        if (!write.Success) return write;
+        var result = PublishInputProbe(draft, authoritative: true, sourceOverride: source, caretIndex: caret);
+        return CommandResult.Ok(message, result.Data);
+    }
+
+    private CommandResult SetMirrorMode(
+        WindowTarget target,
+        AutomationElement root,
+        IReadOnlyDictionary<string, string> args)
+    {
+        if (!args.TryGetValue("active", out var activeValue) || !bool.TryParse(activeValue, out var active))
+            return CommandResult.Fail("InvalidArgument", "input.mirror 需要 active=true 或 active=false。");
+        if (!active) return ReleaseMirror(target, root);
+
+        var seed = args.TryGetValue("text", out var text) ? NormalizeMirrorText(text) : string.Empty;
+        if (seed is null)
+            return CommandResult.Fail("InvalidText", "镜像文本上限 20000 字符，且不允许换行以外的控制字符。");
+        var caret = ReadMirrorCaret(args, seed.Length);
+        bool reentered;
+        lock (_inputProbeSync)
+        {
+            reentered = _mirrorText is not null;
+            _mirrorText = seed;
+            _mirrorCaret = caret;
+        }
+        var result = PublishInputProbe(seed, authoritative: true, sourceOverride: "mirror-enter", caretIndex: caret);
+        return CommandResult.Ok(reentered
+            ? "TV 大屏已重新接管输入。"
+            : "TV 大屏已接管输入；真实输入框不再被遥控器按键或焦点改动。", result.Data);
+    }
+
+    private CommandResult ReleaseMirror(WindowTarget target, AutomationElement root)
+    {
+        lock (_inputProbeSync)
+        {
+            if (_mirrorText is null) return CommandResult.Ok("TV 大屏镜像未激活。", null);
+        }
+        var commit = CommitMirror(target, root);
+        if (!commit.Success) return commit;
+        lock (_inputProbeSync)
+        {
+            _mirrorText = null;
+            _mirrorCaret = null;
+        }
+        return CommandResult.Ok("TV 大屏已交还输入框。", commit.Data);
+    }
+
+    private CommandResult CommitMirror(WindowTarget target, AutomationElement root)
+    {
+        string draft;
+        int? caret;
+        lock (_inputProbeSync)
+        {
+            draft = _mirrorText ?? string.Empty;
+            caret = _mirrorCaret;
+        }
+        var composer = FindComposerFast(root);
+        if (composer is null)
+            return CommandResult.Fail("ComposerNotFound", "当前页面没有可写入的输入框。");
+        var before = ReadProbeText(composer);
+        // Per-change mirroring keeps the editor identical most of the time, so
+        // the focused rewrite (and its brief foreground handoff) is skipped.
+        if (string.Equals(before, draft, StringComparison.Ordinal))
+        {
+            var inSync = PublishInputProbe(draft, authoritative: true, sourceOverride: "mirror-in-sync", caretIndex: caret);
+            return CommandResult.Ok("输入框已与 TV 大屏一致。", inSync.Data);
+        }
+        // The real editor still holds an older value while UIA is occluded;
+        // remember it so the throttled provider cannot roll the probe back.
+        lock (_inputProbeSync) _supersededProbeHashes.Add(ProbeFingerprint(before));
+
+        var write = Input(target, composer, new Dictionary<string, string>
+        {
+            ["text"] = draft,
+            ["replace"] = "true"
+        });
+        return write.Success ? CommandResult.Ok("已把 TV 大屏内容提交到输入框。", write.Data) : write;
+    }
+
     private void BeginInputWrite()
     {
         lock (_inputProbeSync) _inputWriteInProgress++;
@@ -888,6 +1116,8 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
         CancellationTokenSource? cancellation;
         lock (_inputProbeSync)
         {
+            _mirrorText = null;
+            _mirrorCaret = null;
             cancellation = _inputWatcherCancellation;
             _inputWatcherCancellation = null;
         }

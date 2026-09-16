@@ -11,7 +11,7 @@ public sealed class PluginCatalog : IDisposable
 {
     private const int MaxBundleEntries = 2048;
     private const long MaxBundleBytes = 256L * 1024 * 1024;
-    private readonly Dictionary<string, IHarnessPlugin> _plugins = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, LoadedPlugin> _plugins = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _sourcePaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<AssemblyLoadContext> _contexts = [];
     private readonly string _cacheDirectory;
@@ -103,7 +103,7 @@ public sealed class PluginCatalog : IDisposable
     {
         var manifest = JsonSerializer.Deserialize<Manifest>(manifestJson, Wire.Json)
             ?? throw new InvalidDataException("Empty manifest.");
-        if (manifest.ApiVersion != 1) throw new InvalidDataException("Unsupported plugin API version.");
+        if (manifest.ApiVersion != 2) throw new InvalidDataException("插件契约已分离，需要 apiVersion=2 的插件，请重新构建旧插件。");
         var entry = Path.GetFullPath(Path.Combine(root, manifest.EntryAssembly));
         if (!entry.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Entry must be inside the plugin package.");
@@ -113,8 +113,8 @@ public sealed class PluginCatalog : IDisposable
         _contexts.Add(context);
         var assembly = context.LoadFromAssemblyPath(entry);
         var type = assembly.GetType(manifest.EntryType, true)!;
-        var plugin = Activator.CreateInstance(type) as IHarnessPlugin
-            ?? throw new InvalidDataException("Entry does not implement IHarnessPlugin.");
+        var plugin = new LoadedPlugin(Activator.CreateInstance(type)
+            ?? throw new InvalidDataException("Plugin entry could not be instantiated."), expectedKind);
         if (plugin.Descriptor.Id != manifest.Id) { plugin.Dispose(); throw new InvalidDataException("Plugin ID mismatch."); }
         if (!string.Equals(plugin.Descriptor.Name, manifest.Name, StringComparison.Ordinal) ||
             !string.Equals(plugin.Descriptor.Version, manifest.Version, StringComparison.OrdinalIgnoreCase) ||
@@ -128,6 +128,16 @@ public sealed class PluginCatalog : IDisposable
             plugin.Dispose();
             throw new InvalidDataException(
                 $"插件类型为 {plugin.Descriptor.Kind}，应放入 {FolderForKind(plugin.Descriptor.Kind)} 目录。");
+        }
+        if (expectedKind == PluginKinds.Target)
+        {
+            var missing = HarnessPluginActions.DefaultActions.Select(a => a.Id)
+                .Except(plugin.Descriptor.Actions.Select(a => a.Id), StringComparer.OrdinalIgnoreCase).ToArray();
+            if (missing.Length > 0)
+            {
+                plugin.Dispose();
+                throw new InvalidDataException("Harness 通用契约缺少动作：" + string.Join(", ", missing));
+            }
         }
         _plugins.Add(manifest.Id, plugin);
         _sourcePaths.Add(manifest.Id, Path.GetFullPath(sourcePath));
@@ -160,12 +170,10 @@ public sealed class PluginCatalog : IDisposable
     {
         if (!_plugins.TryGetValue(request.Plugin, out var plugin))
             return CommandResult.Fail("PluginNotFound", $"未找到插件：{request.Plugin}");
-        return plugin is IAsyncHarnessPlugin asyncPlugin
-            ? await asyncPlugin.ExecuteAsync(request.Action, request.Arguments ?? [], ct)
-            : await Task.Run(() => plugin.Execute(request.Action, request.Arguments ?? []), ct);
+        return await plugin.ExecuteAsync(request.Action, request.Arguments ?? [], ct);
     }
 
-    public bool StartHosted(string pluginId, IPluginHostContext context, out string? error)
+    public bool StartHosted(string pluginId, IRemotePluginHostContext context, out string? error)
     {
         error = null;
         if (!_plugins.TryGetValue(pluginId, out var plugin))
@@ -173,7 +181,7 @@ public sealed class PluginCatalog : IDisposable
             error = $"未找到插件：{pluginId}";
             return false;
         }
-        if (plugin is not IHostedHarnessPlugin hosted)
+        if (plugin.RemoteService is not { } hosted)
         {
             error = $"插件 {plugin.Descriptor.Name} 不支持托管生命周期。";
             return false;
@@ -184,7 +192,7 @@ public sealed class PluginCatalog : IDisposable
 
     public void StopHosted(string? pluginId)
     {
-        if (pluginId is not null && _plugins.TryGetValue(pluginId, out var plugin) && plugin is IHostedHarnessPlugin hosted)
+        if (pluginId is not null && _plugins.TryGetValue(pluginId, out var plugin) && plugin.RemoteService is { } hosted)
         {
             try { hosted.Stop(); } catch { /* shutdown must continue */ }
         }
@@ -194,11 +202,54 @@ public sealed class PluginCatalog : IDisposable
     {
         foreach (var plugin in _plugins.Values)
         {
-            if (plugin is IHostedHarnessPlugin hosted) { try { hosted.Stop(); } catch { /* shutdown must continue */ } }
+            if (plugin.RemoteService is { } hosted) { try { hosted.Stop(); } catch { /* shutdown must continue */ } }
             try { plugin.Dispose(); } catch { /* shutdown must continue */ }
         }
         _plugins.Clear();
         _sourcePaths.Clear();
+    }
+
+    // Internal dispatch adapter only; it is deliberately not a public plugin
+    // contract and never makes a remote plugin implement IHarnessPlugin.
+    private sealed class LoadedPlugin : IDisposable
+    {
+        private readonly object _instance;
+        public PluginDescriptor Descriptor { get; }
+        public IHostedRemotePlugin? RemoteService => _instance is IRemotePlugin ? _instance as IHostedRemotePlugin : null;
+
+        public LoadedPlugin(object instance, string kind)
+        {
+            _instance = instance;
+            if (kind == PluginKinds.Target && instance is IHarnessPlugin harness &&
+                instance is not (IRemotePlugin or IAsyncRemotePlugin or IHostedRemotePlugin))
+                Descriptor = harness.Descriptor;
+            else if (kind == PluginKinds.Remote && instance is IRemotePlugin remote &&
+                instance is not (IHarnessPlugin or IAsyncHarnessPlugin))
+                Descriptor = remote.Descriptor;
+            else
+            {
+                (instance as IDisposable)?.Dispose();
+                throw new InvalidDataException(kind == PluginKinds.Remote
+                    ? "Remote entry must implement IRemotePlugin, not IHarnessPlugin."
+                    : "Harness entry must implement IHarnessPlugin, not IRemotePlugin.");
+            }
+        }
+
+        public CommandResult Execute(string action, IReadOnlyDictionary<string, string> arguments) => _instance switch
+        {
+            IHarnessPlugin harness => harness.Execute(action, arguments),
+            IRemotePlugin remote => remote.Execute(action, arguments),
+            _ => throw new InvalidOperationException("Unknown plugin contract.")
+        };
+
+        public Task<CommandResult> ExecuteAsync(string action, IReadOnlyDictionary<string, string> arguments, CancellationToken ct) => _instance switch
+        {
+            IHarnessPlugin when _instance is IAsyncHarnessPlugin harness => harness.ExecuteAsync(action, arguments, ct),
+            IRemotePlugin when _instance is IAsyncRemotePlugin remote => remote.ExecuteAsync(action, arguments, ct),
+            _ => Task.Run(() => Execute(action, arguments), ct)
+        };
+
+        public void Dispose() => ((IDisposable)_instance).Dispose();
     }
 
     private sealed record Manifest(string Id, string Name, string Version, string Kind, int ApiVersion, string EntryAssembly, string EntryType);

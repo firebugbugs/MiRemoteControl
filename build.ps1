@@ -52,7 +52,9 @@ $pluginPackages = Get-ChildItem -LiteralPath (Join-Path $root 'plugins') -Direct
     $manifestPath = Join-Path $_.FullName 'plugin.json'
     $projectPath = Get-ChildItem -LiteralPath $_.FullName -Filter '*.csproj' -File | Select-Object -First 1
     if (-not (Test-Path -LiteralPath $manifestPath) -or $null -eq $projectPath) { return }
-    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    # plugin.json is UTF-8 (it carries localized names); read it explicitly so
+    # Windows PowerShell does not decode it with the ANSI code page.
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($manifest.id -notmatch '^[A-Za-z0-9._-]+$') { throw "Invalid plugin id in $manifestPath" }
     $destination = switch ($manifest.kind) {
         'remote' { $remotePluginsRoot }

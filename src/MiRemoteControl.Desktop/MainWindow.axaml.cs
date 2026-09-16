@@ -50,6 +50,7 @@ public partial class MainWindow : Window
     private bool _powerCloseEventsInitialized;
     private bool _powerCloseRemoteHeld;
     private readonly Dictionary<string, DateTimeOffset> _cursorEventAt = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTimeOffset> _cursorMovedAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _cursorRemoteHeld = new(StringComparer.OrdinalIgnoreCase);
     private bool _cursorEventsInitialized;
     private CancellationTokenSource? _remoteEventCancellation;
@@ -65,6 +66,8 @@ public partial class MainWindow : Window
     private bool _bigScreenLocalDirty;
     private int _bigScreenEditGeneration;
     private bool _openingBigScreen;
+    private DispatcherTimer? _bigScreenBackRepeatTimer;
+    private CancellationTokenSource? _bigScreenCaretSyncCancellation;
     private VoicePromptWindow? _voicePromptWindow;
     private int _powerFlashGeneration;
     private string _voiceModelDirectory = Path.Combine(
@@ -506,9 +509,9 @@ public partial class MainWindow : Window
             var content = new StackPanel();
             content.Children.Add(header);
             var actionPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(42, 14, 0, 0), Spacing = 8 };
-            AddTargetActionButton(actionPanel, target, TargetPluginActions.Open, "打开");
-            AddTargetActionButton(actionPanel, target, TargetPluginActions.Status, "读取状态");
-            AddTargetActionButton(actionPanel, target, TargetPluginActions.Stop, "停止任务");
+            AddTargetActionButton(actionPanel, target, HarnessPluginActions.Open, "打开");
+            AddTargetActionButton(actionPanel, target, HarnessPluginActions.Status, "读取状态");
+            AddTargetActionButton(actionPanel, target, HarnessPluginActions.Stop, "停止任务");
             if (actionPanel.Children.Count > 0) content.Children.Add(actionPanel);
             TargetPluginCardsPanel.Children.Add(new Border
             {
@@ -743,10 +746,10 @@ public partial class MainWindow : Window
         SetSelectedPluginStatus("正在执行…");
         try
         {
-            if (request.Action == TargetPluginActions.Open) await _client.AllowForegroundAsync();
+            if (request.Action == HarnessPluginActions.Open) await _client.AllowForegroundAsync();
             var result = await _client.InvokeAsync(request.PluginId, request.Action);
             SetSelectedPluginStatus(result.Message);
-            if (result.Success && request.Action == TargetPluginActions.Open) FlashPowerButton();
+            if (result.Success && request.Action == HarnessPluginActions.Open) FlashPowerButton();
         }
         catch (Exception exception)
         {
@@ -969,7 +972,7 @@ public partial class MainWindow : Window
         if (!remote.TryGetProperty("recentInputs", out var recent) || recent.ValueKind != JsonValueKind.Array) return;
         var entries = recent.EnumerateArray()
                      .Where(item => item.TryGetProperty("button", out var buttonValue) &&
-                                    buttonValue.GetString() is "Up" or "Down" or "Left" or "Right")
+                                    buttonValue.GetString() is "Up" or "Down" or "Left" or "Right" or "Back")
                      .OrderBy(item => item.GetProperty("occurredAt").GetDateTimeOffset())
                      .ToArray();
         if (!_cursorEventsInitialized)
@@ -995,17 +998,65 @@ public partial class MainWindow : Window
             if (!isDown)
             {
                 _cursorRemoteHeld.Remove(button);
+                if (button.Equals("Back", StringComparison.OrdinalIgnoreCase)) StopBigScreenBackRepeat();
                 continue;
             }
-            if (!_cursorRemoteHeld.Add(button) || _bigScreenTextWindow is null) continue;
+            if (_bigScreenTextWindow is not { } screen) continue;
 
-            var keyId = entry.TryGetProperty("keyId", out var keyIdValue) ? keyIdValue.GetString() : null;
-            // Physical D-pad keys keep their normal keyboard delivery to the
-            // focused target editor. Simulated buttons have no OS key event,
-            // so only those need an explicit target action.
-            if (keyId?.StartsWith("VIRTUAL:", StringComparison.OrdinalIgnoreCase) == true)
-                _bigScreenTextWindow.MoveCaret(button);
+            if (button.Equals("Back", StringComparison.OrdinalIgnoreCase))
+            {
+                // Back is the big screen's delete key while it owns editing.
+                // The target plugin refuses that key in the same window, so the
+                // real draft is never deleted behind the screen. Repeated HID
+                // down events fold into one press: the repeat timer handles the
+                // hold, with a keyboard-like initial delay.
+                if (!_cursorRemoteHeld.Add(button)) continue;
+                screen.DeleteBackward();
+                StartBigScreenBackRepeat(screen);
+                continue;
+            }
+
+            // A held direction key keeps reporting down events (~30/s) — that is
+            // the remote's own key repeat, and every report moves the caret. The
+            // tiny window only folds duplicated reports of a single press.
+            if (_cursorMovedAt.TryGetValue(button, out var lastMove) &&
+                occurredAt - lastMove < TimeSpan.FromMilliseconds(20)) continue;
+            _cursorMovedAt[button] = occurredAt;
+            // If the editor handled this key itself as a keyboard event just
+            // now, skip the explicit move so it does not move twice.
+            if (DateTimeOffset.UtcNow - screen.LastNavigationAt < TimeSpan.FromMilliseconds(150)) continue;
+            screen.MoveCaret(button);
         }
+    }
+
+    private void StartBigScreenBackRepeat(BigScreenTextWindow window)
+    {
+        if (_bigScreenBackRepeatTimer is null)
+        {
+            _bigScreenBackRepeatTimer = new DispatcherTimer();
+            _bigScreenBackRepeatTimer.Tick += BigScreenBackRepeatTick;
+        }
+        // One press deletes exactly one character. Auto-repeat only starts
+        // after the delay a held keyboard key would use (Windows uses about
+        // half a second), so letting go a little late cannot eat a second
+        // character.
+        _bigScreenBackRepeatTimer.Interval = TimeSpan.FromMilliseconds(550);
+        _bigScreenBackRepeatTimer.Start();
+    }
+
+    private void StopBigScreenBackRepeat() => _bigScreenBackRepeatTimer?.Stop();
+
+    private void BigScreenBackRepeatTick(object? sender, EventArgs e)
+    {
+        if (_bigScreenTextWindow is not { } window || !_cursorRemoteHeld.Contains("Back"))
+        {
+            StopBigScreenBackRepeat();
+            return;
+        }
+        // Past the initial delay the key repeats at the usual typing speed.
+        if (_bigScreenBackRepeatTimer is { } timer && timer.Interval != TimeSpan.FromMilliseconds(80))
+            timer.Interval = TimeSpan.FromMilliseconds(80);
+        window.DeleteBackward();
     }
 
     private void SetVoiceResultText(string text)
@@ -1024,10 +1075,11 @@ public partial class MainWindow : Window
         }
         if (_openingBigScreen) return;
 
-        if (!_selectedTargetActions.Contains(TargetPluginActions.InputWatch) ||
-            !_selectedTargetActions.Contains(TargetPluginActions.InputReplace))
+        if (!_selectedTargetActions.Contains(HarnessPluginActions.InputWatch) ||
+            !_selectedTargetActions.Contains(HarnessPluginActions.InputReplace) ||
+            !_selectedTargetActions.Contains(HarnessPluginActions.InputMirror))
         {
-            VoiceTranslationStatus.Text = $"{_selectedPluginName} 未提供双向输入同步，无法打开大屏。";
+            VoiceTranslationStatus.Text = $"{_selectedPluginName} 未提供大屏输入接管能力，无法打开大屏。";
             return;
         }
 
@@ -1044,7 +1096,7 @@ public partial class MainWindow : Window
             {
                 var initial = await _client.InvokeAsync(
                     _selectedPluginId,
-                    TargetPluginActions.InputWatch,
+                    HarnessPluginActions.InputWatch,
                     new() { ["afterRevision"] = "-1", ["timeoutMs"] = "1200" },
                     timeoutMs: 1500);
                 initialAvailable = TryReadInputProbe(
@@ -1061,11 +1113,52 @@ public partial class MainWindow : Window
             return;
         }
 
+        // From here on the big screen owns editing: the target keeps its
+        // current value and stops touching (and focusing) the real editor
+        // until the draft is committed on send or close.
+        var pluginId = _selectedPluginId;
+        var mirrorArguments = new Dictionary<string, string>
+        {
+            ["active"] = "true",
+            ["text"] = initialText
+        };
+        // Seed the mirrored caret as well, so an early voice write lands where
+        // the target editor's caret was when the big screen opened.
+        if (initialCaretIndex is { } seededCaret)
+            mirrorArguments["caret"] = seededCaret.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var mirror = await _client.InvokeAsync(
+            pluginId,
+            HarnessPluginActions.InputMirror,
+            mirrorArguments,
+            timeoutMs: 5000);
+        if (!mirror.Success)
+        {
+            VoiceTranslationStatus.Text = $"无法让 TV 大屏接管输入：{mirror.Message}";
+            return;
+        }
+
+        // Releasing the mirror is a no-op when it is already released, so a
+        // window that goes away without the normal close path (Alt+F4, an
+        // OS-level close) still hands its draft back.
+        async Task ReleaseMirrorAsync()
+        {
+            try
+            {
+                await _client.InvokeAsync(
+                    pluginId,
+                    HarnessPluginActions.InputMirror,
+                    new() { ["active"] = "false" },
+                    timeoutMs: 60000);
+            }
+            catch { /* the next open re-takes the mirror anyway */ }
+        }
+
         var window = new BigScreenTextWindow();
         window.TextEdited += text => QueueBigScreenEdit(window, text);
+        window.CaretChanged += caret => QueueBigScreenCaretSync(window, caret);
         window.CloseRequested += CloseBigScreenText;
         _bigScreenTextWindow = window;
-        _bigScreenProbePluginId = _selectedPluginId;
+        _bigScreenProbePluginId = pluginId;
         _bigScreenProbeRevision = initialRevision;
         _bigScreenProbeText = initialText;
         _bigScreenProbeCaretIndex = initialCaretIndex;
@@ -1087,12 +1180,18 @@ public partial class MainWindow : Window
             _bigScreenEditCancellation?.Cancel();
             _bigScreenEditCancellation?.Dispose();
             _bigScreenEditCancellation = null;
+            _bigScreenCaretSyncCancellation?.Cancel();
+            _bigScreenCaretSyncCancellation?.Dispose();
+            _bigScreenCaretSyncCancellation = null;
             if (ReferenceEquals(_bigScreenProbeCancellation, probeCancellation))
             {
                 _bigScreenProbeCancellation = null;
                 probeCancellation.Cancel();
                 probeCancellation.Dispose();
             }
+            // A window that goes away without the normal close path (Alt+F4,
+            // an OS-level close) must still hand the draft back.
+            _ = ReleaseMirrorAsync();
         };
         var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
         if (screen is not null) window.Position = screen.Bounds.Position;
@@ -1108,7 +1207,64 @@ public partial class MainWindow : Window
         _bigScreenEditCancellation?.Dispose();
         var cancellation = new CancellationTokenSource();
         _bigScreenEditCancellation = cancellation;
-        _bigScreenEditTask = ReplaceBigScreenTextAsync(window, generation, cancellation, 180);
+        // Mirror the whole text into the real editor once typing pauses. This
+        // must NOT run while the user is still working: every mirror write
+        // briefly takes the foreground, and doing that mid-typing would steal
+        // the remote's keys from the big screen. Voice writes go through
+        // immediately (the plugin's append path mirrors them itself), so this
+        // only covers screen-local typing and deletion.
+        _bigScreenEditTask = ReplaceBigScreenTextAsync(window, generation, cancellation, 1500);
+    }
+
+    /// <summary>
+    /// Navigation on the big screen does not change the text, but the mirror
+    /// still needs the caret so a later insertion (voice) lands there.
+    /// </summary>
+    private void QueueBigScreenCaretSync(BigScreenTextWindow window, int caret)
+    {
+        _bigScreenCaretSyncCancellation?.Cancel();
+        _bigScreenCaretSyncCancellation?.Dispose();
+        var cancellation = new CancellationTokenSource();
+        _bigScreenCaretSyncCancellation = cancellation;
+        _ = SyncBigScreenCaretAsync(window, caret, cancellation);
+    }
+
+    private async Task SyncBigScreenCaretAsync(
+        BigScreenTextWindow window,
+        int caret,
+        CancellationTokenSource cancellation)
+    {
+        var ct = cancellation.Token;
+        var gateEntered = false;
+        try
+        {
+            await Task.Delay(120, ct);
+            await _bigScreenSyncGate.WaitAsync(ct);
+            gateEntered = true;
+            if (!ReferenceEquals(_bigScreenTextWindow, window)) return;
+            ct.ThrowIfCancellationRequested();
+            // Caret-only: the mirror updates its caret and leaves both the
+            // draft text and the real editor untouched.
+            await _client.InvokeAsync(
+                _bigScreenProbePluginId ?? _selectedPluginId,
+                HarnessPluginActions.InputReplace,
+                new()
+                {
+                    ["caretOnly"] = "true",
+                    ["caret"] = caret.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                },
+                timeoutMs: 3000,
+                ct: CancellationToken.None);
+        }
+        catch (OperationCanceledException) { }
+        catch { /* the next navigation retries */ }
+        finally
+        {
+            if (gateEntered) _bigScreenSyncGate.Release();
+            if (ReferenceEquals(_bigScreenCaretSyncCancellation, cancellation))
+                _bigScreenCaretSyncCancellation = null;
+            cancellation.Dispose();
+        }
     }
 
     private async Task ReplaceBigScreenTextAsync(
@@ -1121,9 +1277,8 @@ public partial class MainWindow : Window
         var gateEntered = false;
         try
         {
-            // Synchronization briefly focuses the Electron composer because
-            // its advertised ValuePattern setter ignores changed values.
-            // Wait for a real typing pause before that bounded focus handoff.
+            // Wait for a real typing pause so a whole word lands in one
+            // replacement instead of one IPC round trip per keystroke.
             if (delayMilliseconds > 0) await Task.Delay(delayMilliseconds, ct);
             await _bigScreenSyncGate.WaitAsync(ct);
             gateEntered = true;
@@ -1131,16 +1286,19 @@ public partial class MainWindow : Window
             if (!ReferenceEquals(_bigScreenTextWindow, window)) return;
             ct.ThrowIfCancellationRequested();
             var localText = window.CurrentText;
-            // The foreground owner is the TV window, while the actual write
-            // is performed by the separate Host process. Explicitly delegate
-            // foreground permission before every replacement; otherwise
-            // Windows can reject the automatic sync even though a later
-            // close-time retry happens to succeed.
-            await _client.AllowForegroundAsync(CancellationToken.None);
+            // The target plugin keeps this draft in memory while the mirror is
+            // active, so the write is a fast in-process update that never
+            // takes the foreground (or the caret) away from the big screen.
             var result = await _client.InvokeAsync(
                 _bigScreenProbePluginId ?? _selectedPluginId,
-                TargetPluginActions.InputReplace,
-                new() { ["text"] = localText },
+                HarnessPluginActions.InputReplace,
+                new()
+                {
+                    ["text"] = localText,
+                    // Keep the mirrored caret on the big screen's own caret so
+                    // a later voice write inserts exactly where it is.
+                    ["caret"] = window.EditorCaretIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                },
                 timeoutMs: 3000,
                 // Once ZCode has begun replacing the value it must finish as
                 // one atomic operation. A newer TV edit waits on the gate and
@@ -1169,7 +1327,7 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    if (ReferenceEquals(_bigScreenTextWindow, window)) window.FocusEditor();
+                    if (ReferenceEquals(_bigScreenTextWindow, window)) ReclaimBigScreenForeground(window);
                 }
                 finally { _bigScreenSyncGate.Release(); }
             }
@@ -1203,6 +1361,21 @@ public partial class MainWindow : Window
                 return;
             }
         }
+        // Releasing the mirror is what commits the draft: the plugin writes
+        // the complete text back in one operation and only then lets the real
+        // editor be edited again. Keep the window open when that fails so the
+        // text is never silently dropped.
+        var commit = await _client.InvokeAsync(
+            _bigScreenProbePluginId ?? _selectedPluginId,
+            HarnessPluginActions.InputMirror,
+            new() { ["active"] = "false" },
+            timeoutMs: 60000);
+        if (!commit.Success)
+        {
+            VoiceTranslationStatus.Text = $"TV 大屏内容提交失败：{commit.Message}";
+            window.FocusEditor();
+            return;
+        }
         if (ReferenceEquals(_bigScreenTextWindow, window)) window.Close();
     }
 
@@ -1227,7 +1400,7 @@ public partial class MainWindow : Window
                 if (pluginId is null) return;
                 var result = await _client.InvokeAsync(
                     pluginId,
-                    TargetPluginActions.InputWatch,
+                    HarnessPluginActions.InputWatch,
                     new()
                     {
                         ["afterRevision"] = _bigScreenProbeRevision.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -1250,11 +1423,24 @@ public partial class MainWindow : Window
                         // revision but must never overwrite the TV TextBox.
                         if (!_bigScreenLocalDirty)
                         {
-                            window.ApplySnapshot(text, caretIndex);
-                            window.FocusEditor();
+                            // Our own replacements keep the big screen as the
+                            // caret authority. A writer that inserted into the
+                            // mirrored draft (voice) reports where it put the
+                            // text, and the caret must follow it there.
+                            var source = result.Data is JsonElement { ValueKind: JsonValueKind.Object } probe &&
+                                         probe.TryGetProperty("source", out var sourceValue) &&
+                                         sourceValue.ValueKind == JsonValueKind.String
+                                ? sourceValue.GetString()
+                                : null;
+                            window.ApplySnapshot(text, source == "mirror-append" ? caretIndex : null);
                         }
                     }
                 }
+                // Reclaim only once a change has settled. Doing it on every poll
+                // would steal the foreground from a mirror write still in flight
+                // (SendInput only reaches the foreground window), which made the
+                // next write fail with EditorFocusLost.
+                ReclaimBigScreenForeground(window);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
             catch
@@ -1267,6 +1453,30 @@ public partial class MainWindow : Window
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
         }
     }
+
+    /// <summary>
+    /// Every mirror write reaches the real editor through SendInput, which only
+    /// works while that editor owns the foreground. Windows then refuses a plain
+    /// re-activation, so release the foreground lock with a synthetic ALT press
+    /// and take the big screen back explicitly.
+    /// </summary>
+    private static void ReclaimBigScreenForeground(BigScreenTextWindow window)
+    {
+        if (window.IsActive) return;
+        var handle = window.TryGetPlatformHandle()?.Handle ?? 0;
+        if (handle == 0) return;
+        const byte vkMenu = 0x12;
+        keybd_event(vkMenu, 0, 0, 0);
+        keybd_event(vkMenu, 0, 2, 0); // KEYEVENTF_KEYUP
+        SetForegroundWindow(handle);
+        window.FocusEditor();
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(nint hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte vk, byte scan, uint flags, nint extra);
 
     private static bool TryReadInputProbe(
         CommandResult result,
@@ -1304,9 +1514,9 @@ public partial class MainWindow : Window
 
     private bool SelectedPluginSupportsPower =>
         _loadedTargetPluginIds.Contains(_selectedPluginId) &&
-        _selectedTargetActions.Contains(TargetPluginActions.Status) &&
-        _selectedTargetActions.Contains(TargetPluginActions.Open) &&
-        _selectedTargetActions.Contains(TargetPluginActions.Close);
+        _selectedTargetActions.Contains(HarnessPluginActions.Status) &&
+        _selectedTargetActions.Contains(HarnessPluginActions.Open) &&
+        _selectedTargetActions.Contains(HarnessPluginActions.Close);
 
     private static void OpenPath(string path)
     {

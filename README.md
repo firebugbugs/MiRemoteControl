@@ -2,6 +2,8 @@
 
 C# / .NET 10 的 Avalonia 生命周期宿主、轻量 IPC Host、命令行客户端，以及小米遥控器和 ZCode 两个单文件插件。
 
+插件 API 已升级为 v2：遥控器与 Harness 使用独立接口，ZCode 动作成为 Harness 通用契约。开发与迁移见 [插件契约分离](docs/插件契约分离.md)。
+
 ## 构建和运行
 
 Windows 11，安装 .NET 10 SDK。当前打样为依赖框架的构建，运行机器需要 .NET 10 Desktop Runtime。打开 `MiRemoteControl.slnx`，或在本目录运行：
@@ -63,9 +65,9 @@ Qwen3-ASR ONNX 目录需要 `conv_frontend.onnx`、`encoder.int8.onnx`（或 `en
 .\mrc.exe zcode send
 ```
 
-输入默认追加到当前输入框末尾，只有 `--replace` 才覆盖。文本通过 Unicode 键盘输入，多行使用 Shift+Enter，输入后回读确认；输入不会自动发送。UTF-8 文件支持中文和 Emoji，上限 20000 字符；换行以外的控制字符不接受。
+输入默认插入到当前光标位置，只有 `--replace` 才覆盖整个输入框。文本通过 Unicode 键盘输入，多行使用 Shift+Enter，输入后回读确认；输入不会自动发送。UTF-8 文件支持中文和 Emoji，上限 20000 字符；换行以外的控制字符不接受。
 
-空输入框在 TV 大屏下接收第一段语音时，ZCode 插件会等待原生窗口与 Electron 编辑器焦点连续稳定后再投递；仅允许在确认文本尚未发送时恢复焦点重试，避免首轮语音丢失或重复。
+TV 大屏打开期间由大屏独占编辑：ZCode 插件用 `input.mirror` 把当前文本接管为内存草稿，真实输入框不再接收遥控器按键；语音（以及任何走 `input` 的写入）会插到镜像光标处而不是末尾。大屏上的字符、方向键、删除键都在大屏内生效。文本一有变化就写回真实输入框（打字/删除停顿后触发，语音立即触发），因此退出大屏几乎瞬时；写回需要短暂取用前台，随后由桌面端用合成 ALT 复位并夺回大屏焦点。写回失败会保留大屏窗口，不会静默丢弃内容。
 
 发送调用当前页面的“发送”按钮，不使用无条件 Enter。成功结果的 `Dispatched` 表示已调用 UI 操作，不等于服务端已完成模型任务。超时或 `InputUnverified` 时先检查页面，不要直接重发。
 
@@ -118,7 +120,7 @@ Qwen3-ASR ONNX 目录需要 `conv_frontend.onnx`、`encoder.int8.onnx`（或 `en
 
 Host/Core/Client 没有对任何具体遥控器或 ZCode 插件项目的编译引用。构建后，遥控器插件分发到 `artifacts/app/plugins/remotes/`，被控端插件分发到 `artifacts/app/plugins/targets/`。兼容用的 `core remote.*` 与 `core voice.*` 命令会代理到当前遥控器插件，所以现有 Avalonia 界面和 CLI 命令无需变化。
 
-新增普通目标插件实现 `IHarnessPlugin`。包含主输入框的 target 插件还必须声明标准 `input.probe` 动作并返回 `InputProbeSnapshot`；TV 大屏只读取当前 target 的探针，不硬编码 ZCode，并以不可激活窗口显示，避免目标输入框丢失焦点。新增遥控器插件将 `PluginDescriptor.Kind` 设为 `remote`，并实现 `IHostedHarnessPlugin`；Host 会在选中时调用 `Start`，切换或退出时调用 `Stop`。异步硬件操作可再实现 `IAsyncHarnessPlugin`，通过 `IPluginHostContext` 调用当前目标插件。DLL、私有依赖、`.deps.json` 和根目录 `plugin.json` 打包为一个 ZIP 容器；`remote` 类型放入 `plugins/remotes/`，`target` 类型放入 `plugins/targets/`，放错目录会拒绝加载。推荐使用 `.mrcplugin` 后缀，但加载器按文件内容识别，不限制扩展名。可用 `mrc remote driver select <plugin-id>` 切换未来新增的遥控器插件，不需要修改界面。
+新增普通目标插件实现 `IHarnessPlugin`。包含主输入框的 target 插件还必须声明标准 `input.probe` 动作并返回 `InputProbeSnapshot`；TV 大屏只读取当前 target 的探针，不硬编码 ZCode；它打开时会用 `input.mirror` 让 target 把当前文本接管为内存草稿，大屏独占键盘焦点与编辑，真实输入框在提交前既不接收遥控器按键也不会被聚焦。新增遥控器插件将 `PluginDescriptor.Kind` 设为 `remote`，并实现 `IHostedHarnessPlugin`；Host 会在选中时调用 `Start`，切换或退出时调用 `Stop`。异步硬件操作可再实现 `IAsyncHarnessPlugin`，通过 `IPluginHostContext` 调用当前目标插件。DLL、私有依赖、`.deps.json` 和根目录 `plugin.json` 打包为一个 ZIP 容器；`remote` 类型放入 `plugins/remotes/`，`target` 类型放入 `plugins/targets/`，放错目录会拒绝加载。推荐使用 `.mrcplugin` 后缀，但加载器按文件内容识别，不限制扩展名。可用 `mrc remote driver select <plugin-id>` 切换未来新增的遥控器插件，不需要修改界面。
 
 ## 打样协议与蓝图区别
 
