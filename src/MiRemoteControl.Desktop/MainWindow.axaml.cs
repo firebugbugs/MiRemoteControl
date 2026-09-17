@@ -52,9 +52,9 @@ public partial class MainWindow : Window
     private DateTimeOffset _lastMenuEventAt;
     private bool _menuEventsInitialized;
     private bool _menuRemoteHeld;
-    private bool _menuSwitchBusy;
+    private bool _pluginSwitchBusy;
     // Working-plugin card order as shown in the main window; the remote Menu
-    // key cycles through it so "next" matches what the user sees.
+    // and Up/Down keys move through it so "next" matches what the user sees.
     private readonly List<string> _orderedTargetPluginIds = new();
     private readonly Dictionary<string, DateTimeOffset> _cursorEventAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> _cursorMovedAt = new(StringComparer.OrdinalIgnoreCase);
@@ -109,6 +109,9 @@ public partial class MainWindow : Window
         };
 
         Opened += OnWindowOpened;
+        // Tunnel the raw arrow/Enter keys before inner controls see them while
+        // the studio owns the keyboard focus — see OnStudioKeyDown.
+        AddHandler(KeyDownEvent, OnStudioKeyDown, RoutingStrategies.Tunnel);
         PropertyChanged += (_, args) =>
         {
             if (args.Property == WindowStateProperty) UpdateWindowStateVisuals();
@@ -773,7 +776,15 @@ public partial class MainWindow : Window
         else VoiceTranslationStatus.Text = message;
     }
 
-    private async void PowerButtonClick(object? sender, RoutedEventArgs e)
+    private async void PowerButtonClick(object? sender, RoutedEventArgs e) => await RunStudioPowerActionAsync();
+
+    /// <summary>
+    /// Presses the virtual Power key on the studio's own remote mock: the
+    /// backend opens the selected plugin's target window (or closes it when
+    /// that target already owns the foreground). Used by the on-screen power
+    /// button and by the remote's Ok key while the studio is up front.
+    /// </summary>
+    private async Task RunStudioPowerActionAsync()
     {
         if (_pluginPowerBusy) return;
         if (!SelectedPluginSupportsPower)
@@ -893,11 +904,11 @@ public partial class MainWindow : Window
         ToggleWindowFromHomeKey();
     }
 
-    // The Menu key cycles the working Harness plugin. It only fires while this
-    // window owns the foreground: a press without focus merely brings the
-    // window forward (the same activation Home performs), so the next press
-    // switches. That keeps one keystroke from both stealing focus and silently
-    // re-pointing the remote at a different target.
+    // The Menu key cycles the working Harness plugin forward. It only fires
+    // while this window owns the foreground: a press without focus merely
+    // brings the window forward (the same activation Home performs), so the
+    // next press switches. That keeps one keystroke from both stealing focus
+    // and silently re-pointing the remote at a different target.
     private void HandleMenuFromRemote()
     {
         if (!IsMainWindowForeground())
@@ -905,25 +916,27 @@ public partial class MainWindow : Window
             if (Application.Current is App app) app.ShowMainWindow();
             return;
         }
-        _ = SwitchToNextHarnessPluginAsync();
+        _ = SwitchHarnessPluginAsync(1);
     }
 
-    private async Task SwitchToNextHarnessPluginAsync()
+    private async Task SwitchHarnessPluginAsync(int offset)
     {
-        if (_menuSwitchBusy) return;
+        if (_pluginSwitchBusy) return;
         if (_orderedTargetPluginIds.Count == 0)
         {
             SetSelectedPluginStatus("没有可切换的工作插件。");
             return;
         }
 
-        // Wrap around: after the last card in the panel, switch back to the
-        // first. A selected plugin that is no longer listed restarts at the top.
+        // Wrap around in both directions: past the last card in the panel the
+        // order restarts at the first (and vice versa). A selected plugin that
+        // is no longer listed restarts at the edge the direction comes from.
         var index = _orderedTargetPluginIds.FindIndex(id =>
             string.Equals(id, _selectedPluginId, StringComparison.OrdinalIgnoreCase));
-        var nextId = _orderedTargetPluginIds[(index + 1) % _orderedTargetPluginIds.Count];
+        if (index < 0) index = offset >= 0 ? -1 : 0;
+        var nextId = _orderedTargetPluginIds[(index + offset + _orderedTargetPluginIds.Count) % _orderedTargetPluginIds.Count];
 
-        _menuSwitchBusy = true;
+        _pluginSwitchBusy = true;
         try
         {
             var result = await _client.InvokeAsync("core", "remote.select", new() { ["plugin"] = nextId }, timeoutMs: 3000);
@@ -944,8 +957,53 @@ public partial class MainWindow : Window
         }
         finally
         {
-            _menuSwitchBusy = false;
+            _pluginSwitchBusy = false;
         }
+    }
+
+    // While the main window owns the foreground, the remote's cursor keys
+    // drive the studio itself instead of any target: Up/Down walk the working
+    // plugin cards and Ok presses the virtual power key that opens (or, when
+    // it is already the foreground target, closes) the selected plugin.
+    private void HandleStudioNavigationInputs(string button)
+    {
+        if (!IsMainWindowForeground()) return;
+        if (button is not ("Up" or "Down" or "Ok")) return;
+        // A held key keeps reporting down events (~30/s); one physical press
+        // must stay one action.
+        if (!_cursorRemoteHeld.Add(button)) return;
+        switch (button)
+        {
+            case "Up":
+                _ = SwitchHarnessPluginAsync(-1);
+                break;
+            case "Down":
+                _ = SwitchHarnessPluginAsync(1);
+                break;
+            default:
+                _ = RunStudioPowerActionAsync();
+                break;
+        }
+    }
+
+    // The remote's Up/Down/Ok keys reach Windows as ordinary arrow and Enter
+    // keystrokes as well. While the studio owns the keyboard focus those raw
+    // keystrokes must not also drive inner controls (a bare arrow on the
+    // focused voice-model combo would silently change the loaded model), so
+    // they are swallowed here; the remote event loop stays the single
+    // authority for what these keys do. Text editors and an open combo
+    // dropdown keep their native key handling.
+    private void OnStudioKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Up or Key.Down or Key.Enter)) return;
+        if (e.KeyModifiers != KeyModifiers.None) return;
+        if (FocusManager?.GetFocusedElement() is InputElement focused)
+        {
+            if (focused is TextBox) return;
+            for (var scope = focused; scope is not null; scope = scope.Parent as InputElement)
+                if (scope is ComboBox { IsDropDownOpen: true }) return;
+        }
+        e.Handled = true;
     }
 
     private bool HandleGlobalEscape()
@@ -1068,7 +1126,13 @@ public partial class MainWindow : Window
                 if (button.Equals("Back", StringComparison.OrdinalIgnoreCase)) StopBigScreenBackRepeat();
                 continue;
             }
-            if (_bigScreenTextWindow is not { } screen) continue;
+            if (_bigScreenTextWindow is not { } screen)
+            {
+                // Without the big screen the cursor keys fall back to the
+                // studio itself while its window owns the foreground.
+                HandleStudioNavigationInputs(button);
+                continue;
+            }
 
             if (button.Equals("Back", StringComparison.OrdinalIgnoreCase))
             {

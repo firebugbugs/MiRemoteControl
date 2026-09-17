@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using MiRemoteControl.Contracts;
 using MiRemoteControl.Core;
@@ -47,7 +48,8 @@ static async Task RunAsync(Process owner)
         catalog,
         targetGate,
         () => selectedTargetPluginId,
-        shutdown.Token);
+        shutdown.Token,
+        owner.Id);
     if (selectedRemotePluginId is null)
         catalog.Errors.Add("未找到遥控器插件。");
     else if (!catalog.StartHosted(selectedRemotePluginId, context, out var startError))
@@ -345,10 +347,22 @@ internal sealed class HostPluginContext(
     PluginCatalog catalog,
     SemaphoreSlim targetGate,
     Func<string?> selectedTarget,
-    CancellationToken hostShutdown) : IRemotePluginHostContext
+    CancellationToken hostShutdown,
+    int ownerProcessId) : IRemotePluginHostContext
 {
     public string? SelectedTargetPluginId => selectedTarget();
     public IReadOnlyList<PluginDescriptor> Plugins => catalog.Descriptors.Where(p => p.Kind == PluginKinds.Target).ToArray();
+
+    public bool IsStudioForeground()
+    {
+        if (!OperatingSystem.IsWindows() || ownerProcessId <= 0) return false;
+        var window = GetForegroundWindow();
+        // A thread id of zero means the window handle is stale — treat that as
+        // "not the studio" so remote keys keep their target behavior.
+        return window != 0 &&
+               GetWindowThreadProcessId(window, out var processId) != 0 &&
+               processId == ownerProcessId;
+    }
 
     public async Task<CommandResult> ExecuteAsync(
         string pluginId,
@@ -379,6 +393,12 @@ internal sealed class HostPluginContext(
     }
 
     public void Log(string source, Exception exception) => ProgramLog(source, exception);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(nint window, out uint processId);
 
     private static void ProgramLog(string source, Exception exception)
     {

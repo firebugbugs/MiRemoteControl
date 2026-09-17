@@ -2,7 +2,12 @@
 
 C# / .NET 10 的 Avalonia 生命周期宿主、轻量 IPC Host、命令行客户端，以及小米遥控器和 ZCode 两个单文件插件。
 
-插件 API 已升级为 v2：遥控器与 Harness 使用独立接口，ZCode 动作成为 Harness 通用契约。开发与迁移见 [插件契约分离](docs/插件契约分离.md)。
+插件 API 为 v2：遥控器与 Harness 使用独立接口，两者互不继承。详细文档见 [docs](docs/)：
+
+- [架构总览](docs/架构总览.md) — 组件、进程模型、IPC 协议、插件模型与加载规则
+- [Harness 插件开发](docs/Harness插件开发.md) — 被控软件控制插件（`kind=target`）
+- [遥控器插件开发](docs/遥控器插件开发.md) — 设备与语音服务插件（`kind=remote`）
+- [语音模型](docs/语音模型.md) — 支持的模型类型与自备模型的规格要求
 
 ## 构建和运行
 
@@ -21,18 +26,18 @@ Set-Location .\artifacts\app
 .\mrc.exe voice model select "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
 .\mrc.exe voice latest play
 .\mrc.exe voice latest pause
-.\mrc.exe zcode open
-.\mrc.exe zcode input --text "请解释这段代码"
-.\mrc.exe zcode send
-.\mrc.exe zcode stop
-.\mrc.exe zcode close
+.\mrc.exe invoke mrc.zcode open
+.\mrc.exe invoke mrc.zcode input --text "请解释这段代码"
+.\mrc.exe invoke mrc.zcode send
+.\mrc.exe invoke mrc.zcode stop
+.\mrc.exe invoke mrc.zcode close
 ```
 
 也可以直接运行 `artifacts\app\MiRemoteControl.exe`（Windows）或对应平台的 `MiRemoteControl`。`mrc start` 同样会先启动 Avalonia 桌面框架，再由桌面框架启动 Host 和当前遥控器插件；Host 不再允许脱离 Avalonia 单独启动。界面仍通过 IPC 显示遥控器、语音模型及插件状态。
 
-在“学习语音键”中按一次遥控器语音键，程序保存来源设备及键码。之后按住该键开始本机中文识别，抬起时将识别文字写入 ZCode 当前输入框，回读成功后发送。默认优先选用名称含 `Hands-Free` 的蓝牙麦克风，但不会修改系统默认录音设备；可以在 Avalonia 桌面端选择其他输入设备。每次完成的语音会原子覆盖保存到 `%LocalAppData%\MiRemoteControl\recordings\latest-voice.wav`，只保留最近一条，不把音频内容写入日志；桌面端及 `mrc voice latest play/pause/status` 可以播放或暂停它。
+在“学习语音键”中按一次遥控器语音键，程序保存来源设备及键码。之后按住该键开始本机中文识别，抬起时将识别文字写入当前工作插件的输入框，回读成功后发送。默认优先选用名称含 `Hands-Free` 的蓝牙麦克风，但不会修改系统默认录音设备；可以在 Avalonia 桌面端选择其他输入设备。每次完成的语音会原子覆盖保存到 `%LocalAppData%\MiRemoteControl\recordings\latest-voice.wav`，只保留最近一条，不把音频内容写入日志；桌面端及 `mrc voice latest play/pause/status` 可以播放或暂停它。
 
-关闭命令行窗口不影响后台。退出 Avalonia（托盘“退出程序”）会停止 Host 和遥控器插件；即使桌面进程异常结束，Host 也会通过父进程监视自动退出。标题栏关闭仍按原界面行为隐藏到托盘，不等于退出程序。停止后台也可使用 `mrc stop`；`mrc zcode stop` 只停止 ZCode 当前页面的运行任务。重新构建前应先退出桌面端，避免覆盖运行中的 DLL。
+关闭命令行窗口不影响后台。退出 Avalonia（托盘“退出程序”）会停止 Host 和遥控器插件；即使桌面进程异常结束，Host 也会通过父进程监视自动退出。标题栏关闭仍按原界面行为隐藏到托盘，不等于退出程序。停止后台也可使用 `mrc stop`；`mrc invoke mrc.zcode stop` 只停止 ZCode 当前页面的运行任务。重新构建前应先退出桌面端，避免覆盖运行中的 DLL。
 
 ## 虚拟遥控器与自动化调试
 
@@ -40,7 +45,7 @@ Set-Location .\artifacts\app
 
 Windows HID 诊断可用 `mrc remote status --json` 查看 Raw Input 与 HID Tap 状态。HID Tap 的本地 IPC 管道为当前用户专用的 `MiRemoteControl.HidTap.<scope>.v2`，帧格式复用四字节长度 + UTF-8 JSON，字段为 `sequence/devicePath/reportHex`。Windows 驱动宿主层将原始报告送入该管道后，`mrc.remote.xiaomi` 插件使用 RC003 的标准 usage 映射（包括 `Back=0xF1`、`VolumeUp=0x80`、`VolumeDown=0x81`）生成按键事件；普通用户态程序不应直接打开系统 HID 集合。
 
-`mrc remote select <plugin-id>` 设置当前工作插件；当前默认是 `mrc.zcode`，并会与 Avalonia 插件卡片的选择状态同步。`power` 是目前已绑定业务动作的按键：后台读取所选插件的 `status.running` 与 `status.focused`；目标未运行或虽已运行但不在系统前台时执行 `open` 并抢占焦点，只有目标已经是前台激活窗口时才执行 `close`。`home` 由 Avalonia 桌面端消费并采用同样的前台语义：主窗口不是系统前台窗口时显示、恢复并给予焦点，只有它已经位于前台时才隐藏。实体 TV 键由桌面进程使用系统热键、低级钩子和全局键态轮询三路冗余捕获并统一去重，虚拟 TV/Home/Power 则由独立后台事件循环消费；这些路径都不依赖 Mi Remote Studio 是否激活或可见。大屏也可由任意鼠标点击或全局 `Esc` 关闭；Home、Power 只把关闭大屏作为附加动作。其他按键当前产生完整的虚拟遥控器事件和界面反馈，后续按键业务映射可以继续复用同一通道。所有命令均支持 `--json`，成功为退出码 0，适合 AI 或脚本判定结果。
+`mrc remote select <plugin-id>` 设置当前工作插件；当前默认是 `mrc.zcode`，并会与 Avalonia 插件卡片的选择状态同步。`power` 是目前已绑定业务动作的按键：后台读取所选插件的 `status.running` 与 `status.focused`；目标未运行或虽已运行但不在系统前台时执行 `open` 并抢占焦点，只有目标已经是前台激活窗口时才执行 `close`。`home` 由 Avalonia 桌面端消费并采用同样的前台语义：主窗口不是系统前台窗口时显示、恢复并给予焦点，只有它已经位于前台时才隐藏。Mi Remote Studio 主窗口位于前台时，遥控器接管工作室自身：`up`/`down` 按插件卡片顺序前后切换工作插件（`menu` 键仍向前循环，无前台时第一次按 `menu` 先唤出主窗口），`ok` 等同按下界面的虚拟电源键（呼出当前工作插件的目标软件；目标已在前台时则关闭）。此时后台不会再把 `ok`/`back` 派发给目标插件，避免同一次按键既呼出软件又触发目标的发送/停止或退格；这些原始方向/回车键击也不会落入主窗口内部控件（例如语音模型下拉框）。实体 TV 键由桌面进程使用系统热键、低级钩子和全局键态轮询三路冗余捕获并统一去重，虚拟 TV/Home/Power 则由独立后台事件循环消费；这些路径都不依赖 Mi Remote Studio 是否激活或可见。大屏也可由任意鼠标点击或全局 `Esc` 关闭；Home、Power 只把关闭大屏作为附加动作。其他按键当前产生完整的虚拟遥控器事件和界面反馈，后续按键业务映射可以继续复用同一通道。所有命令均支持 `--json`，成功为退出码 0，适合 AI 或脚本判定结果。
 
 ## 语音模型管理
 
@@ -52,22 +57,24 @@ Windows HID 诊断可用 `mrc remote status --json` 查看 Raw Input 与 HID Tap
 .\mrc.exe voice model select "my-whisper-model.bin" --json
 ```
 
-Qwen3-ASR ONNX 目录需要 `conv_frontend.onnx`、`encoder.int8.onnx`（或 `encoder.onnx`）、`decoder.int8.onnx`（或 `decoder.onnx`）和 `tokenizer` 子目录。SenseVoice ONNX 目录需要 `model.int8.onnx`（或 `model.onnx`）和 `tokens.txt`。切换时先加载新模型，成功后才释放旧模型；损坏或格式不支持的模型不会破坏当前可用模型。程序不内置也不自动下载默认模型，用户需要自行把模型放进上述目录。
+Qwen3-ASR ONNX 目录需要 `conv_frontend.onnx`、`encoder.int8.onnx`（或 `encoder.onnx`）、`decoder.int8.onnx`（或 `decoder.onnx`）和 `tokenizer` 子目录。SenseVoice ONNX 目录需要 `model.int8.onnx`（或 `model.onnx`）和 `tokens.txt`。除此之外，目录名或子目录名含 `whisper`、`transducer`、`paraformer`、`wenet`、`tdnn`、`telespeech` 等关键字的 ONNX 目录也会被识别——完整引擎与文件清单见 [语音模型](docs/语音模型.md)。切换时先加载新模型，成功后才释放旧模型；损坏或格式不支持的模型不会破坏当前可用模型。程序不内置也不自动下载默认模型，用户需要自行把模型放进上述目录。
 
 `close` 使用 `WM_SYSCOMMAND / SC_CLOSE`，等价于正常标题栏关闭请求，不杀进程；ZCode 如有托盘驻留或保存确认，遵循其原有行为。`open` 自动查找默认安装路径、启动/恢复窗口并请求前台显示。后台进程默认没有前台激活权：激活被拒时按住一次合成 ALT 键跨越 `SetForegroundWindow` 调用（激活成功后才释放，避免裸 ALT 落到原前台应用的菜单栏），并以短时间重复枚举、重新激活来应对 Electron 启动/单实例移交期间销毁重建窗口句柄的情况。极端情况下仍被拒绝时返回 `FocusDenied`，请手动激活 ZCode 后重试。
 
 ## 输入和发送
 
 ```powershell
-.\mrc.exe zcode input --text "追加内容"
-.\mrc.exe zcode input --text "替换整个输入框" --replace
-.\mrc.exe zcode input --file .\prompt.txt --replace
-.\mrc.exe zcode send
+.\mrc.exe invoke mrc.zcode input --text "追加内容"
+.\mrc.exe invoke mrc.zcode input --text "替换整个输入框" --replace
+.\mrc.exe invoke mrc.zcode input --file .\prompt.txt --replace
+.\mrc.exe invoke mrc.zcode send
 ```
 
 输入默认插入到当前光标位置，只有 `--replace` 才覆盖整个输入框。文本通过 Unicode 键盘输入，多行使用 Shift+Enter，输入后回读确认；输入不会自动发送。UTF-8 文件支持中文和 Emoji，上限 20000 字符；换行以外的控制字符不接受。
 
-TV 大屏打开期间由大屏独占编辑：ZCode 插件用 `input.mirror` 把当前文本接管为内存草稿，真实输入框不再接收遥控器按键；语音（以及任何走 `input` 的写入）会插到镜像光标处而不是末尾。大屏上的字符、方向键、删除键都在大屏内生效。文本一有变化就写回真实输入框（打字/删除停顿后触发，语音立即触发），因此退出大屏几乎瞬时；写回需要短暂取用前台，随后由桌面端用合成 ALT 复位并夺回大屏焦点。写回失败会保留大屏窗口，不会静默丢弃内容。
+TV 大屏打开期间由大屏独占编辑：当前工作插件用 `input.mirror` 把当前文本接管为内存草稿，真实输入框不再接收遥控器按键；语音（以及任何走 `input` 的写入）会插到镜像光标处而不是末尾。大屏上的字符、方向键、删除键都在大屏内生效。文本一有变化就写回真实输入框（打字/删除停顿后触发，语音立即触发），因此退出大屏几乎瞬时；写回需要短暂取用前台，随后由桌面端用合成 ALT 复位并夺回大屏焦点。写回失败会保留大屏窗口，不会静默丢弃内容。
+
+大屏打开时按遥控器确认键等同于「退出大屏并发送」：桌面端先退出大屏（把大屏上的完整文本提交回真实输入框），再调用当前工作插件的 `send`。镜像接管期间目标插件对 `send` 返回 `MirrorOwnsInput`，所以遥控器插件的同名按键不会抢在大屏之前发送一份陈旧草稿，发送后输入框不会残留文本。
 
 发送调用当前页面的“发送”按钮，不使用无条件 Enter。成功结果的 `Dispatched` 表示已调用 UI 操作，不等于服务端已完成模型任务。超时或 `InputUnverified` 时先检查页面，不要直接重发。
 
@@ -76,11 +83,11 @@ TV 大屏打开期间由大屏独占编辑：ZCode 插件用 `input.mirror` 把�
 ## 确认信息
 
 ```powershell
-.\mrc.exe zcode confirm status
-.\mrc.exe zcode confirm down
-.\mrc.exe zcode confirm up
-.\mrc.exe zcode confirm select
-.\mrc.exe zcode confirm submit
+.\mrc.exe invoke mrc.zcode confirm.status
+.\mrc.exe invoke mrc.zcode confirm.down
+.\mrc.exe invoke mrc.zcode confirm.up
+.\mrc.exe invoke mrc.zcode confirm.select
+.\mrc.exe invoke mrc.zcode confirm.submit
 ```
 
 - `up/down`：在实际确认卡片内发送上下键，依照 ZCode 自己的导航规则选择。
@@ -94,10 +101,10 @@ TV 大屏打开期间由大屏独占编辑：ZCode 插件用 `input.mirror` 把�
 
 ```powershell
 .\mrc.exe status --json
-.\mrc.exe zcode status --json
-.\mrc.exe zcode inspect --json
-.\mrc.exe zcode open --exe "C:\Program Files\ZCode\ZCode.exe"
-.\mrc.exe zcode status --window 123456
+.\mrc.exe invoke mrc.zcode status --json
+.\mrc.exe invoke mrc.zcode inspect --json
+.\mrc.exe invoke mrc.zcode open --exe "C:\Program Files\ZCode\ZCode.exe"
+.\mrc.exe invoke mrc.zcode status --window 123456
 .\mrc.exe invoke mrc.zcode confirm.down --json
 ```
 
@@ -116,11 +123,10 @@ TV 大屏打开期间由大屏独占编辑：ZCode 插件用 `input.mirror` 把�
 | Cli | `mrc.exe` 命令入口 |
 | Plugin.XiaomiRemote | 小米遥控器 Raw Input/HID Tap、ATVV、语音识别、模型和录音 |
 | Plugin.ZCode | 安装发现、窗口操作、UIA 控件选择、标准输入探针、输入和确认交互 |
-| Tests | 协议边界及插件失败隔离测试 |
 
 Host/Core/Client 没有对任何具体遥控器或 ZCode 插件项目的编译引用。构建后，遥控器插件分发到 `artifacts/app/plugins/remotes/`，被控端插件分发到 `artifacts/app/plugins/targets/`。兼容用的 `core remote.*` 与 `core voice.*` 命令会代理到当前遥控器插件，所以现有 Avalonia 界面和 CLI 命令无需变化。
 
-新增普通目标插件实现 `IHarnessPlugin`。包含主输入框的 target 插件还必须声明标准 `input.probe` 动作并返回 `InputProbeSnapshot`；TV 大屏只读取当前 target 的探针，不硬编码 ZCode；它打开时会用 `input.mirror` 让 target 把当前文本接管为内存草稿，大屏独占键盘焦点与编辑，真实输入框在提交前既不接收遥控器按键也不会被聚焦。新增遥控器插件将 `PluginDescriptor.Kind` 设为 `remote`，并实现 `IHostedHarnessPlugin`；Host 会在选中时调用 `Start`，切换或退出时调用 `Stop`。异步硬件操作可再实现 `IAsyncHarnessPlugin`，通过 `IPluginHostContext` 调用当前目标插件。DLL、私有依赖、`.deps.json` 和根目录 `plugin.json` 打包为一个 ZIP 容器；`remote` 类型放入 `plugins/remotes/`，`target` 类型放入 `plugins/targets/`，放错目录会拒绝加载。推荐使用 `.mrcplugin` 后缀，但加载器按文件内容识别，不限制扩展名。可用 `mrc remote driver select <plugin-id>` 切换未来新增的遥控器插件，不需要修改界面。
+新增普通目标插件实现 `IHarnessPlugin`，并声明 `HarnessPluginActions.DefaultActions` 的全部 21 个标准动作。包含主输入框的 target 插件还必须实现标准 `input.probe` 动作并返回 `InputProbeSnapshot`；TV 大屏只读取当前 target 的探针，不硬编码 ZCode；它打开时会用 `input.mirror` 让 target 把当前文本接管为内存草稿，大屏独占键盘焦点与编辑，真实输入框在提交前既不接收遥控器按键也不会被聚焦。新增遥控器插件将 `PluginDescriptor.Kind` 设为 `remote`，实现 `IRemotePlugin` 与 `IHostedRemotePlugin`；Host 会在选中时调用 `Start`，切换或退出时调用 `Stop`。异步硬件操作可再实现 `IAsyncRemotePlugin`，通过 `IRemotePluginHostContext` 调用当前目标插件。DLL、私有依赖、`.deps.json` 和根目录 `plugin.json` 打包为一个 ZIP 容器；`remote` 类型放入 `plugins/remotes/`，`target` 类型放入 `plugins/targets/`，放错目录会拒绝加载。推荐使用 `.mrcplugin` 后缀，但加载器按文件内容识别，不限制扩展名。可用 `mrc remote driver select <plugin-id>` 切换未来新增的遥控器插件，不需要修改界面。
 
 ## 打样协议与蓝图区别
 
@@ -191,6 +197,7 @@ Host/Core/Client 没有对任何具体遥控器或 ZCode 插件项目的编译�
 | 鼠标点击大屏任意位置 | 通过；立即关闭 |
 | 大屏打开时按 Home | 通过；关闭大屏，并照常切换 MiRemoteControl 主窗口显示/隐藏 |
 | 大屏打开时按 Power | 实现为附加关闭大屏；目标插件原有开关逻辑仍由遥控器插件执行，不被替换 |
+| 大屏打开时按遥控器确认键 | 未实机复验；桌面端先退出大屏（提交完整草稿）再调用当前工作插件的 `send`，镜像接管期间插件对 `send` 返回 `MirrorOwnsInput`，发送后输入框无残留 |
 
 ## 已知边界
 
@@ -200,6 +207,7 @@ Host/Core/Client 没有对任何具体遥控器或 ZCode 插件项目的编译�
 - 进程内插件不是安全沙箱。UIA 提供者永久阻塞时，客户端超时，核心保留执行锁，避免并发注入；需要停止/重启核心恢复。正式版本可将 UIA 执行隔离到工作进程。
 - 副作用操作没有跨进程崩溃后的 exactly-once 保证，也不会在超时后自动重试。
 - 当前是框架依赖目录产物，不是安装包。Windows 遥控器、自启动和自包含发布仍需单独打包；Avalonia 桌面端已支持跨平台发布。
+- `core status` 目前以遥控器插件的 `status` 成功为前提，Desktop 也在编译期引用了两个内置插件项目；详见 [架构总览](docs/架构总览.md) 的「已知偏离」。
 
 ## 实现参考
 

@@ -4,3 +4,6 @@ TestResults/
 **/obj/
 .idea/
 .vs/
+.reasonix/
+reasonix.toml
+docs/

@@ -256,10 +256,25 @@ public sealed class PluginCatalog : IDisposable
 
     private sealed class PluginLoadContext(string entry) : AssemblyLoadContext
     {
+        // CsWinRT keeps process-wide state and throws
+        // "Attempt to update previously set global instance" when a second
+        // copy initializes. Plugins packaged for the windows TFM carry their
+        // own WinRT.Runtime/SDK.NET copies, so loading them per plugin would
+        // blow up the first WinRT call after another copy (e.g. the host's
+        // framework assemblies) has already initialized. Route them to the
+        // host's shared framework copy instead — every host in this solution
+        // targets the same windows TFM, so the assemblies always resolve.
+        private static readonly HashSet<string> ProcessSharedAssemblies = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "WinRT.Runtime",
+            "Microsoft.Windows.SDK.NET"
+        };
+
         private readonly AssemblyDependencyResolver _resolver = new(entry);
         protected override Assembly? Load(AssemblyName name)
         {
             if (name.Name == typeof(IHarnessPlugin).Assembly.GetName().Name) return typeof(IHarnessPlugin).Assembly;
+            if (name.Name is not null && ProcessSharedAssemblies.Contains(name.Name)) return null;
             var path = _resolver.ResolveAssemblyToPath(name);
             return path is null ? null : LoadFromAssemblyPath(path);
         }

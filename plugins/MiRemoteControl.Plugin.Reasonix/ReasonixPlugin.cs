@@ -1,51 +1,63 @@
 using System.Diagnostics;
+using System.Text.Json;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
 using MiRemoteControl.Contracts;
 
-namespace MiRemoteControl.Plugin.ChatGpt;
+namespace MiRemoteControl.Plugin.Reasonix;
 
 /// <summary>
-/// Harness plugin (<c>kind=target</c>) for the ChatGPT desktop app.
+/// Harness plugin (<c>kind=target</c>) for the ReasoniX desktop app — an AI
+/// agent harness through which the remote control can operate and debug the
+/// computer by conversation.
 /// </summary>
 /// <remarks>
-/// The app is an Electron/Chromium shell whose composer is a ProseMirror
-/// contenteditable. The implementation therefore follows the same rules as the
-/// ZCode harness: locate controls by accessible properties instead of
-/// coordinates, read the real value back after every write, publish monotonic
-/// probe revisions, and never touch the focused editor while a mirror owns the
-/// draft.
+/// The app is a Wails shell (Go host + WebView2/Chromium renderer). The web
+/// content is fully exposed to UIA, and its semantic CSS classes are stable
+/// across app updates while the localized accessible names are not: the send
+/// button relabels itself to a guidance-queue button while a turn is running
+/// and the stop button only exists then. Controls are therefore located by
+/// class tokens first (composer__input / composer__btn--send /
+/// composer__btn--stop), with localized names as a fallback. Enter is
+/// ReasoniX's own send shortcut, so this plugin never presses it on the
+/// composer: sending and confirmations always go through the app's buttons.
 /// </remarks>
-public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
+public sealed class ReasonixPlugin : IHarnessPlugin, IAsyncHarnessPlugin
 {
-    // composer 在不同界面语言下暴露的可访问名（即 placeholder）。
+    // ReasoniX 本体是版本化目录里的 reasonix-desktop.exe；根目录的 Reasonix.exe
+    // 是稳定启动入口。窗口身份只按完整进程路径判断，不按进程名。
+    private static readonly string InstallRoot = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Reasonix");
+    private static readonly string LauncherExecutable = Path.Combine(InstallRoot, "Reasonix.exe");
+    private static readonly string VersionsRoot = Path.Combine(InstallRoot, "versions");
+    private const string DesktopExecutableName = "reasonix-desktop.exe";
+
+    // composer 的稳定类名；placeholder 随语言与运行状态（普通/目标/计划模式）变化，
+    // 仅在类名缺失时兜底。
+    private const string ComposerClassToken = "composer__input";
     private static readonly string[] ComposerNames =
     [
-        "随心输入", "输入消息", "发送消息", "询问 ChatGPT", "有什么可以帮忙的",
-        "Ask anything", "Ask ChatGPT", "Message ChatGPT", "Send a message"
+        "给 Reasonix 发消息", "询问 Reasonix", "Message Reasonix", "Ask Reasonix", "Send a message to Reasonix"
     ];
-    // 名称都不匹配时，仍可按该应用实际使用的编辑器类名定位输入框。
-    private const string ComposerClassName = "ProseMirror";
-    private static readonly string[] SendButtonNames = ["发送", "Send", "发送消息", "Send message", "提交", "Submit"];
-    private static readonly string[] StopButtonNames = ["停止", "Stop", "停止生成", "Stop generating", "停止响应", "Stop response"];
-    private static readonly string[] ConfirmationListNames = ["需要权限", "Permission required", "需要批准", "Permission request"];
-    private static readonly string[] ConfirmationHints = ["使用 Tab / 上下键选择", "Use Tab / arrow keys to choose"];
-    private static readonly string[] ConfirmationButtonNames = ["确认", "Confirm", "提交", "Submit", "继续", "Continue", "批准", "Approve", "允许", "Allow"];
+    // 发送按钮：空闲时 aria-label 为「发送（Enter）」，运行中变为「加入引导队列
+    // （Enter）」。类名 composer__btn--send 稳定不变。
+    private const string SendClassToken = "composer__btn--send";
+    private static readonly string[] SendButtonNames =
+        ["发送", "加入引导队列", "Send", "Add to guidance queue", "Add guidance"];
+    // 停止按钮仅在任务运行时渲染（aria-label「停止（Esc）」/「Stop (Esc)」）。
+    private const string StopClassToken = "composer__btn--stop";
+    private static readonly string[] StopButtonNames = ["停止", "Stop"];
+    // 工具审批卡片的动作按钮文案（v1.38.3 实测自应用内嵌的简中/繁中/英文语言包）。
+    private static readonly string[] ApprovalAllowNames =
+    [
+        "允许一次", "仅本次允许", "本会话允许", "本会话允许这些目录", "加入项目允许目录", "总是允许", "开始执行",
+        "允許一次", "僅本次允許", "本工作階段允許這些目錄", "加入專案允許目錄",
+        "Allow once", "Allow this session", "Allow these directories this session",
+        "Add to project allow directories", "Always allow", "Start execution"
+    ];
+    private static readonly string[] ApprovalDenyNames = ["拒绝", "拒絕", "Deny"];
     private const int MaxTextLength = 20000;
 
-    // ChatGPT 桌面版有两种分发：MSIX 包（WindowsApps 下带版本号的目录）
-    // 与普通安装包。两者都要能识别，且只按完整进程路径判断，不按进程名。
-    // 包家族名会随版本演变（OpenAI.ChatGPT → OpenAI.Codex），所以运行中的
-    // 进程只锚定 WindowsApps 下的 OpenAI.* 目录，不锁定具体家族名。
-    private const string MsixDirectoryPrefix = "OpenAI.Codex_";
-    private static readonly string MsixRoot = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WindowsApps");
-    private static readonly string MsixExecutablePrefix = Path.Combine(MsixRoot, "OpenAI.");
-    private static readonly string[] InstalledExecutables =
-    [
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "ChatGPT", "ChatGPT.exe"),
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "ChatGPT", "ChatGPT.exe")
-    ];
     private static readonly IReadOnlyDictionary<string, string> NoArguments = new Dictionary<string, string>();
 
     private static readonly Dictionary<string, string[]> AllowedArguments = new(StringComparer.OrdinalIgnoreCase)
@@ -85,10 +97,9 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
     private static readonly object AutomationSync = new();
 
     /// <summary>
-    /// When the last send was dispatched. The desktop app's big screen and the
-    /// remote plugin both answer the confirm key, and the app needs a moment
-    /// before it renders its stop button; without this the plugin treated that
-    /// gap as "nothing is running" and a repeated confirm press sent the same
+    /// When the last send was dispatched. The remote's confirm key needs a moment
+    /// before ReasoniX renders its stop button; without this the plugin treated
+    /// that gap as "nothing is running" and a repeated confirm press sent the same
     /// draft again.
     /// </summary>
     private DateTimeOffset _lastSendAt = DateTimeOffset.MinValue;
@@ -108,7 +119,7 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
     private Task? _inputWatcherTask;
     private TaskCompletionSource<long> _inputChanged = NewInputChangedSignal();
 
-    public PluginDescriptor Descriptor { get; } = new("mrc.chatgpt", "ChatGPT 控制", "0.1.0",
+    public PluginDescriptor Descriptor { get; } = new("mrc.reasonix", "ReasoniX 控制", "0.1.0",
         HarnessPluginActions.DefaultActions, PluginKinds.Target);
 
     public async Task<CommandResult> ExecuteAsync(
@@ -126,7 +137,7 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
         try
         {
             if (!Descriptor.Actions.Any(item => item.Id == action))
-                return CommandResult.Fail("UnknownAction", $"未知 ChatGPT 操作：{action}");
+                return CommandResult.Fail("UnknownAction", $"未知 ReasoniX 操作：{action}");
             var allowed = AllowedArguments.TryGetValue(action, out var keys) ? keys : [];
             var unknown = arguments.Keys.FirstOrDefault(key => !allowed.Contains(key, StringComparer.OrdinalIgnoreCase));
             if (unknown is not null)
@@ -139,13 +150,8 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
             var windows = NativeWindow.Find(isTarget);
             if (action == "open") return Open(explicitExecutable, isTarget, windows, arguments);
             if (action == "status" && windows.Count == 0)
-                return CommandResult.Ok("ChatGPT 未打开。", new TargetPluginStatus(false, false, Details: new { windows }));
+                return CommandResult.Ok("ReasoniX 未打开。", new TargetPluginStatus(false, false, Details: new { windows }));
 
-            // Several ChatGPT windows may coexist (the main window plus a quick
-            // chat window) while the remote's fullscreen mirror owns the
-            // foreground, so composer actions must not depend on foreground
-            // disambiguation. Pick the window that actually exposes the
-            // composer, largest first.
             var target = action == "close"
                 ? NativeWindow.Select(windows, arguments)
                 : SelectComposerWindow(windows, arguments);
@@ -170,8 +176,8 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
             {
                 if (TryReadMirror(out var mirrorProbe)) return mirrorProbe;
                 // Do not query Chromium's accessibility provider while the same
-                // contenteditable is processing a write: those concurrent reads
-                // made the document range settle one edit late.
+                // textarea is processing a write: those concurrent reads made
+                // the document range settle one edit late.
                 if (TryReadProbeDuringWrite(out var inFlight)) return inFlight;
                 var composer = FindComposerFast(root);
                 if (composer is null)
@@ -275,13 +281,13 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
             // status/inspect as a whole. Because the remote's confirm key reads
             // canStop out of status, that single failure silently turned every
             // "stop" press into a "send".
-            var stopButtons = FindButtons(root, StopButtonNames);
-            var sendButtons = FindButtons(root, SendButtonNames);
-            // A send that just happened means a task is already running: the app
-            // only renders its stop button a moment later.
+            var stopButtons = FindButtons(root, StopClassToken, StopButtonNames);
+            var sendButtons = FindButtons(root, SendClassToken, SendButtonNames);
+            // A send that just happened means a task is already starting: ReasoniX
+            // renders its stop button only once the run state is known.
             var running = stopButtons.Any(IsEnabled) || RecentlySent();
             if (action == "inspect") return CommandResult.Ok("UIA 诊断", Inspect(root));
-            if (action == "status") return CommandResult.Ok("ChatGPT 窗口已连接", new TargetPluginStatus(
+            if (action == "status") return CommandResult.Ok("ReasoniX 窗口已连接", new TargetPluginStatus(
                 Running: true,
                 Focused: windows.Any(NativeWindow.IsForeground),
                 CanSend: sendButtons.Any(IsEnabled),
@@ -290,18 +296,25 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
                 {
                     windows = windows.Select(w => new { handle = w.Handle.ToInt64(), w.ProcessId, w.Title }),
                     composer = FindComposerFast(root) is not null,
-                    confirmation = FindConfirmation(root) is not null,
+                    confirmation = HasConfirmation(root),
                     sendButtons = sendButtons.Count,
                     stopButtons = stopButtons.Count
                 }));
-            NativeWindow.Focus(target);
-            if (action.StartsWith("confirm.", StringComparison.Ordinal)) return Confirm(action, target, root);
-            if (action != "stop" && action != "backspace" && FindConfirmation(root) is not null)
+            if (action.StartsWith("confirm.", StringComparison.Ordinal))
+            {
+                NativeWindow.Focus(target);
+                return Confirm(action, target, root);
+            }
+            if (action != "stop" && action != "backspace" && HasConfirmation(root))
                 return CommandResult.Fail("ConfirmationPending", "当前存在确认卡片，请使用 confirm 命令处理，避免操作被遮挡的输入区域。");
             switch (action)
             {
-                case "send": return Send(target, sendButtons);
-                case "stop": return Stop(target, root);
+                case "send":
+                    NativeWindow.Focus(target);
+                    return Send(target, root, sendButtons);
+                case "stop":
+                    NativeWindow.Focus(target);
+                    return Stop(target, root);
                 default: return CommandResult.Fail("UnknownAction", action);
             }
         }
@@ -321,30 +334,42 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// Dispatches the target application's own send action. The desktop app
-    /// exposes a send button while a draft exists; when that button is not in
-    /// the accessibility tree yet, the app's own submit key (Enter) is used —
-    /// Shift+Enter stays a newline, so this is never an unconditional Enter.
+    /// Dispatches ReasoniX's own send button. While a turn is running the very
+    /// same button steers it (labels itself a guidance-queue button), so this
+    /// works in both states. Enter is never pressed as a substitute: it is the
+    /// app's submit shortcut and pressing it against an unexpected focus would
+    /// submit something the caller did not review.
     /// </summary>
-    private CommandResult Send(WindowTarget target, List<AutomationElement> sendButtons)
+    private CommandResult Send(WindowTarget target, AutomationElement root, List<AutomationElement> sendButtons)
     {
         if (RecentlySent())
             return CommandResult.Fail("SendDebounced", "刚刚已经发送过一次，已忽略这次重复的发送请求。");
         var candidates = sendButtons.Where(IsEnabled).ToArray();
+        if (candidates.Length == 0)
+        {
+            // The buttons may have been queried while the window was minimized
+            // (every web control then reports offscreen). The window is in the
+            // foreground now, so re-query while the a11y tree wakes up.
+            for (var attempt = 0; candidates.Length == 0 && attempt < 6; attempt++)
+            {
+                Thread.Sleep(attempt == 0 ? 100 : 200);
+                candidates = FindButtons(root, SendClassToken, SendButtonNames).Where(IsEnabled).ToArray();
+            }
+        }
+        if (candidates.Length == 0)
+            return CommandResult.Fail("SendUnavailable", "当前没有可用的发送按钮（输入框可能为空）。");
         if (candidates.Length > 1)
             throw new ControlException("AmbiguousControl", "找到多个可用的发送按钮，无法安全选择。");
         NativeWindow.RequireForeground(target);
-        if (candidates.Length == 1) InvokeElement(candidates[0], "发送按钮");
-        else NativeWindow.Key(target, 0x0D);
+        InvokeElement(candidates[0], "发送按钮");
         PublishInputProbe(string.Empty, authoritative: true, sourceOverride: "send");
         lock (_inputProbeSync) _lastSendAt = DateTimeOffset.UtcNow;
-        return CommandResult.Ok("已调用 ChatGPT 的发送动作。",
-            new { state = "Dispatched", via = candidates.Length == 1 ? "button" : "submit-key" });
+        return CommandResult.Ok("已调用 ReasoniX 的发送动作。", new { state = "Dispatched", via = "button" });
     }
 
     /// <summary>
-    /// True while a send is recent enough that the app may still be starting its
-    /// response. In that window no stop button exists yet although the task is
+    /// True while a send is recent enough that ReasoniX may still be starting its
+    /// turn. In that window no stop button exists yet although the task is
     /// already running, so another confirm press must not send again.
     /// </summary>
     private bool RecentlySent()
@@ -353,29 +378,26 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
     }
 
     /// <summary>
-    /// Stops the running task through the app's own stop button. The desktop app
-    /// publishes that button (accessible name "停止" / "Stop") only while a
-    /// response is streaming — measured on the live app — so its presence is
-    /// exactly what status must report as canStop. Nothing is invented here: when
-    /// the button is absent the plugin waits briefly and then reports that there
-    /// was nothing to stop, instead of pressing keys that could disturb the
-    /// composer.
+    /// Stops the running turn through ReasoniX's stop button, rendered only
+    /// while a turn is cancellable. Its presence is exactly what status reports
+    /// as canStop; when it is absent the plugin reports that there was nothing
+    /// to stop instead of pressing keys (Esc) that could disturb other UI.
     /// </summary>
     private static CommandResult Stop(WindowTarget target, AutomationElement root)
     {
-        var candidates = FindButtons(root, StopButtonNames).Where(IsEnabled).ToArray();
+        var candidates = FindButtons(root, StopClassToken, StopButtonNames).Where(IsEnabled).ToArray();
         if (candidates.Length > 1)
             throw new ControlException("AmbiguousControl", "找到多个可用的停止按钮，无法安全选择。");
         for (var attempt = 0; candidates.Length == 0 && attempt < 6; attempt++)
         {
             Thread.Sleep(200);
-            candidates = FindButtons(root, StopButtonNames).Where(IsEnabled).ToArray();
+            candidates = FindButtons(root, StopClassToken, StopButtonNames).Where(IsEnabled).ToArray();
         }
         if (candidates.Length == 0)
             return CommandResult.Ok("当前没有需要停止的任务。", new { state = "Idle" });
         NativeWindow.RequireForeground(target);
         InvokeElement(candidates[0], "停止按钮");
-        return CommandResult.Ok("已调用 ChatGPT 的停止按钮。", new { state = "StopRequested", via = "button" });
+        return CommandResult.Ok("已调用 ReasoniX 的停止按钮。", new { state = "StopRequested", via = "button" });
     }
 
     // ------------------------------------------------------------------
@@ -391,23 +413,24 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
         return full;
     }
 
-    private static Func<string, bool> BuildMatcher(string? explicitExecutable) =>
-        explicitExecutable is null
-            ? IsChatGptExecutable
-            : path => string.Equals(Path.GetFullPath(path), explicitExecutable, StringComparison.OrdinalIgnoreCase);
+    private static Func<string, bool> BuildMatcher(string? explicitExecutable)
+    {
+        if (explicitExecutable is null) return IsReasonixDesktop;
+        // The stable launcher spawns the versioned desktop process, so an
+        // explicit launcher path still accepts every versioned desktop exe.
+        if (string.Equals(explicitExecutable, LauncherExecutable, StringComparison.OrdinalIgnoreCase))
+            return IsReasonixDesktop;
+        return path => string.Equals(Path.GetFullPath(path), explicitExecutable, StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
-    /// Accepts only the real ChatGPT desktop executables: the MSIX package
-    /// payload (a version-stamped directory under WindowsApps) or one of the
-    /// known installer locations. A same-named process elsewhere is rejected so
-    /// the plugin can never drive an unrelated window.
+    /// Accepts only the real ReasoniX desktop executable inside the versioned
+    /// install directory. A same-named process elsewhere is rejected so the
+    /// plugin can never drive an unrelated window.
     /// </summary>
-    private static bool IsChatGptExecutable(string path)
-    {
-        if (!string.Equals(Path.GetFileName(path), "ChatGPT.exe", StringComparison.OrdinalIgnoreCase)) return false;
-        if (path.StartsWith(MsixExecutablePrefix, StringComparison.OrdinalIgnoreCase)) return true;
-        return InstalledExecutables.Any(installed => string.Equals(path, installed, StringComparison.OrdinalIgnoreCase));
-    }
+    private static bool IsReasonixDesktop(string path) =>
+        string.Equals(Path.GetFileName(path), DesktopExecutableName, StringComparison.OrdinalIgnoreCase) &&
+        path.StartsWith(VersionsRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
     private static CommandResult Open(
         string? explicitExecutable,
@@ -425,11 +448,11 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
                 windows = NativeWindow.Find(isTarget);
             }
             if (windows.Count == 0)
-                throw new ControlException("WindowNotFound", "已尝试启动 ChatGPT，但没有出现可见窗口。");
+                throw new ControlException("WindowNotFound", "已尝试启动 ReasoniX，但没有出现可见窗口。");
         }
-        // Electron may finish restoring/can replace the HWND shortly after it
-        // first appears. Re-enumerate and re-activate until the target stays
-        // genuinely in the foreground, not just on the taskbar.
+        // WebView2 may finish restoring its window shortly after it first
+        // appears. Re-enumerate and re-activate until the target stays genuinely
+        // in the foreground, not just on the taskbar.
         ControlException? failure = null;
         WindowTarget? activated = null;
         for (var attempt = 0; attempt < 5 && (activated is null || !NativeWindow.IsForeground(activated)); attempt++)
@@ -443,28 +466,20 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
                 }
                 var candidate = NativeWindow.Select(windows, args);
                 NativeWindow.Focus(candidate, promoteToTopmost: true);
-                Thread.Sleep(200); // let Chromium settle, then confirm the foreground
+                Thread.Sleep(200); // let WebView2 settle, then confirm the foreground
                 activated = candidate;
             }
             catch (ControlException e) { failure = e; }
         }
         if (activated is not null && NativeWindow.IsForeground(activated))
-            return CommandResult.Ok("ChatGPT 已在前台显示。", new { handle = activated.Handle.ToInt64(), activated.ProcessId });
-        throw failure ?? new ControlException("FocusDenied", "Windows 未允许切到 ChatGPT 前台。");
+            return CommandResult.Ok("ReasoniX 已在前台显示。", new { handle = activated.Handle.ToInt64(), activated.ProcessId });
+        throw failure ?? new ControlException("FocusDenied", "Windows 未允许切到 ReasoniX 前台。");
     }
 
     private static void StartTarget(string? explicitExecutable)
     {
         if (explicitExecutable is not null)
         {
-            // An executable inside an MSIX payload cannot be started directly;
-            // activate the packaged app instead.
-            if (explicitExecutable.StartsWith(MsixExecutablePrefix, StringComparison.OrdinalIgnoreCase) &&
-                FindMsixApplicationUserModelId() is { } packagedId)
-            {
-                ActivatePackagedApp(packagedId);
-                return;
-            }
             Process.Start(new ProcessStartInfo(explicitExecutable)
             {
                 UseShellExecute = false,
@@ -472,95 +487,42 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
             });
             return;
         }
-        if (FindMsixApplicationUserModelId() is { } applicationUserModelId)
+        if (File.Exists(LauncherExecutable))
         {
-            ActivatePackagedApp(applicationUserModelId);
-            return;
-        }
-        var installed = InstalledExecutables.FirstOrDefault(File.Exists);
-        if (installed is not null)
-        {
-            Process.Start(new ProcessStartInfo(installed)
+            Process.Start(new ProcessStartInfo(LauncherExecutable)
             {
                 UseShellExecute = false,
-                WorkingDirectory = Path.GetDirectoryName(installed)!
+                WorkingDirectory = InstallRoot
             });
             return;
         }
-        throw new ControlException("AppNotInstalled", "未找到 ChatGPT 桌面版，请使用 --exe 指定 ChatGPT.exe 的路径。");
+        // 更新器可能移动了启动器；current.json 记录了激活的版本目录。
+        if (ResolveCurrentVersionExecutable() is { } versioned)
+        {
+            Process.Start(new ProcessStartInfo(versioned)
+            {
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(versioned)!
+            });
+            return;
+        }
+        throw new ControlException("AppNotInstalled", "未找到 ReasoniX 桌面版，请使用 --exe 指定 Reasonix.exe 的路径。");
     }
 
-    private static void ActivatePackagedApp(string applicationUserModelId) =>
-        Process.Start(new ProcessStartInfo("explorer.exe", $"shell:AppsFolder\\{applicationUserModelId}")
-        {
-            UseShellExecute = false
-        });
-
-    /// <summary>
-    /// Derives the MSIX application user model id for the packaged ChatGPT
-    /// desktop app. The deployment API is the primary source: it answers for
-    /// the current user without elevation, while enumerating WindowsApps is
-    /// ACL-denied for normal processes — with the directory probe alone every
-    /// cold start of a packaged install failed with AppNotInstalled. The probe
-    /// is kept as a fallback for contexts where it does work (elevated Host).
-    /// </summary>
-    private static string? FindMsixApplicationUserModelId()
+    private static string? ResolveCurrentVersionExecutable()
     {
         try
         {
-            var manager = new global::Windows.Management.Deployment.PackageManager();
-            foreach (var package in manager.FindPackagesForUser(string.Empty))
-            {
-                if (!package.Id.Name.StartsWith("OpenAI.", StringComparison.OrdinalIgnoreCase)) continue;
-                var entries = package.GetAppListEntriesAsync().AsTask().GetAwaiter().GetResult();
-                if (entries is { Count: > 0 })
-                {
-                    Log($"msix aumid from deployment api: {entries[0].AppUserModelId}");
-                    return entries[0].AppUserModelId;
-                }
-                // The manifest of the shipped package declares exactly one
-                // application with the id <c>App</c>.
-                Log($"msix package {package.Id.FamilyName} has no app entries; deriving !App");
-                return $"{package.Id.FamilyName}!App";
-            }
-            Log("deployment api found no OpenAI.* package");
+            var manifest = JsonSerializer.Deserialize<JsonElement>(
+                File.ReadAllText(Path.Combine(InstallRoot, "current.json")));
+            return manifest.TryGetProperty("activeDir", out var activeDir) && activeDir.GetString() is { } dir
+                ? Path.GetFullPath(Path.Combine(InstallRoot, dir, DesktopExecutableName))
+                : null;
         }
-        catch (Exception exception)
+        catch (Exception e) when (e is IOException or JsonException or ArgumentException)
         {
-            Log($"deployment api failed: {exception.GetType().Name}: {exception.Message}");
+            return null;
         }
-
-        try
-        {
-            foreach (var directory in Directory.EnumerateDirectories(MsixRoot, MsixDirectoryPrefix + "*"))
-            {
-                var segments = Path.GetFileName(directory).Split('_');
-                if (segments.Length < 2) continue;
-                var familyName = $"{segments[0]}_{segments[^1]}";
-                if (!Directory.Exists(Path.Combine(directory, "app"))) continue;
-                Log($"msix aumid from directory probe: {familyName}!App");
-                return $"{familyName}!App";
-            }
-        }
-        catch (Exception e) when (e is UnauthorizedAccessException or IOException or ArgumentException or DirectoryNotFoundException)
-        {
-            Log($"directory probe failed: {e.GetType().Name}: {e.Message}");
-        }
-        return null;
-    }
-
-    private static void Log(string message)
-    {
-        try
-        {
-            var directory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MiRemoteControl", "logs");
-            Directory.CreateDirectory(directory);
-            File.AppendAllText(
-                Path.Combine(directory, $"chatgpt-plugin-{DateTime.Today:yyyyMMdd}.log"),
-                $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}");
-        }
-        catch { /* diagnostics must not break the action */ }
     }
 
     private static bool TryGetCursorKey(string direction, out ushort key)
@@ -591,10 +553,6 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
             if (!Automation.Compare(AutomationElement.FocusedElement, composer))
                 throw new ControlException("EditorFocusLost", "输入框焦点已改变，停止输入。");
         }
-        // An empty contenteditable creates its first editable text node after
-        // receiving focus. During that transition the window can briefly lose
-        // foreground ownership, so require a sustained focus before the first
-        // empty write instead of a single fixed delay.
         var initiallyEmpty = ReadProbeText(composer).Length == 0;
         FocusComposerStable(target, composer, initiallyEmpty ? 4 : 1);
         var before = ReadProbeText(composer);
@@ -625,7 +583,7 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
         var expected = replace ? text : before + text;
         string? actual = null;
         var verified = false;
-        // Chromium may expose the new rendered draft a little later than the
+        // WebView2 may expose the new rendered draft a little later than the
         // key dispatch, so give the provider a short settling window.
         for (var attempt = 0; attempt < 6 && !verified; attempt++)
         {
@@ -638,7 +596,7 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
         }
         if (!verified)
         {
-            // Chromium throttles the accessibility tree while ChatGPT is fully
+            // Chromium throttles the accessibility tree while ReasoniX is fully
             // occluded by the TV mirror: SendInput still reaches the focused
             // composer, but UIA keeps returning the exact pre-write frame.
             // Since every key was accepted and focus stayed on this composer,
@@ -799,7 +757,7 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
             {
                 try
                 {
-                    var windows = NativeWindow.Find(IsChatGptExecutable);
+                    var windows = NativeWindow.Find(IsReasonixDesktop);
                     var target = SelectComposerWindow(windows, NoArguments);
                     var composer = TryRoot(target.Handle) is { } watchRoot ? FindComposerFast(watchRoot) : null;
                     if (composer is not null)
@@ -810,8 +768,8 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
                 }
                 catch
                 {
-                    // The observer remains alive while ChatGPT starts, closes, or
-                    // replaces its Electron window. The next sample retries.
+                    // The observer remains alive while ReasoniX starts, closes, or
+                    // replaces its WebView2 window. The next sample retries.
                 }
             }
             try { await Task.Delay(80, ct); }
@@ -845,84 +803,80 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
     {
         lock (AutomationSync)
         {
-        for (var attempt = 0; attempt < 4; attempt++)
-        {
-            NativeWindow.Focus(target);
-            composer.SetFocus();
-            var stable = true;
-            for (var sample = 0; sample < stableSamples; sample++)
+            for (var attempt = 0; attempt < 4; attempt++)
             {
-                Thread.Sleep(60);
-                if (!NativeWindow.IsForeground(target) ||
-                    !Automation.Compare(AutomationElement.FocusedElement, composer))
+                NativeWindow.Focus(target);
+                composer.SetFocus();
+                var stable = true;
+                for (var sample = 0; sample < stableSamples; sample++)
                 {
-                    stable = false;
-                    break;
+                    Thread.Sleep(60);
+                    if (!NativeWindow.IsForeground(target) ||
+                        !Automation.Compare(AutomationElement.FocusedElement, composer))
+                    {
+                        stable = false;
+                        break;
+                    }
                 }
+                if (stable) return;
             }
-            if (stable) return;
-        }
-        throw new ControlException("EditorFocusLost", "无法稳定聚焦 ChatGPT 输入框，已取消输入。");
+            throw new ControlException("EditorFocusLost", "无法稳定聚焦 ReasoniX 输入框，已取消输入。");
         }
     }
 
     private static string Normalize(string value) => value.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n');
 
     /// <summary>
-    /// Reads the composer's actual draft. ProseMirror exposes the placeholder as
-    /// the accessible value of an empty editor, prefixed by one provider-owned
-    /// newline; that sentinel must never be published as real draft text.
+    /// Reads the composer's actual draft. The composer is a plain textarea whose
+    /// ValuePattern carries exactly the typed value; the accessible Name is the
+    /// localized placeholder and must never be published as draft text.
     /// </summary>
     private static string ReadProbeText(AutomationElement composer)
     {
         var text = (ReadText(composer) ?? string.Empty)
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace('\r', '\n');
-        var placeholder = composer.Current.Name;
-        if (placeholder.Length > 0 && IsComposerPlaceholder(placeholder) && text == "\n" + placeholder)
-            return string.Empty;
-        return text.EndsWith('\n') ? text[..^1] : text;
+        var placeholder = SafeName(composer);
+        if (placeholder.Length > 0 && text == placeholder) return string.Empty;
+        return text;
     }
-
-    private static bool IsComposerPlaceholder(string name) =>
-        ComposerNames.Any(candidate => candidate.StartsWith(name, StringComparison.OrdinalIgnoreCase));
 
     private static int? ReadCaretIndex(AutomationElement composer, string text)
     {
         lock (AutomationSync)
         {
-        try
-        {
-            if (!composer.TryGetCurrentPattern(TextPattern.Pattern, out var patternObject)) return null;
-            var pattern = (TextPattern)patternObject;
-            var selection = pattern.GetSelection();
-            if (selection.Length == 0) return null;
-            var document = pattern.DocumentRange;
-            if (selection[0].CompareEndpoints(
-                    TextPatternRangeEndpoint.End,
-                    document,
-                    TextPatternRangeEndpoint.End) == 0)
-                return text.Length;
+            try
+            {
+                if (!composer.TryGetCurrentPattern(TextPattern.Pattern, out var patternObject)) return null;
+                var pattern = (TextPattern)patternObject;
+                var selection = pattern.GetSelection();
+                if (selection.Length == 0) return null;
+                var document = pattern.DocumentRange;
+                if (selection[0].CompareEndpoints(
+                        TextPatternRangeEndpoint.End,
+                        document,
+                        TextPatternRangeEndpoint.End) == 0)
+                    return text.Length;
 
-            // Build a temporary range from the start of the document to the
-            // active selection end. Its text length is the UTF-16 index used by
-            // the mirror and by string insertion.
-            var prefix = document.Clone();
-            prefix.MoveEndpointByRange(
-                TextPatternRangeEndpoint.End,
-                selection[0],
-                TextPatternRangeEndpoint.End);
-            var prefixText = prefix.GetText(-1)
-                .Replace("\r\n", "\n", StringComparison.Ordinal)
-                .Replace('\r', '\n');
-            return Math.Clamp(prefixText.Length, 0, text.Length);
-        }
-        catch
-        {
-            // Caret metadata is optional. A provider-specific selection error
-            // must never suppress an otherwise valid text snapshot.
-            return null;
-        }
+                // Build a temporary range from the start of the document to the
+                // active selection end. Its text length is the UTF-16 index used by
+                // the mirror and by string insertion.
+                var prefix = document.Clone();
+                prefix.MoveEndpointByRange(
+                    TextPatternRangeEndpoint.End,
+                    selection[0],
+                    TextPatternRangeEndpoint.End);
+                var prefixText = prefix.GetText(-1)
+                    .Replace("\r\n", "\n", StringComparison.Ordinal)
+                    .Replace('\r', '\n');
+                return Math.Clamp(prefixText.Length, 0, text.Length);
+            }
+            catch
+            {
+                // Caret metadata is optional. A provider-specific selection error
+                // must never suppress an otherwise valid text snapshot.
+                return null;
+            }
         }
     }
 
@@ -1271,7 +1225,7 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
 
     // Remembered handle of the window that last exposed the composer: the
     // steady-state read/write path then resolves with a single UIA lookup
-    // instead of probing every ChatGPT window each poll.
+    // instead of probing every ReasoniX window each poll.
     private static nint _composerWindow;
 
     private static WindowTarget SelectComposerWindow(List<WindowTarget> windows, IReadOnlyDictionary<string, string> args)
@@ -1299,39 +1253,35 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
     {
         lock (AutomationSync)
         {
-        // Chromium exposes the composer through ValuePattern even while it is
-        // fully covered by the non-activating TV mirror. This is the closest
-        // representation of the actual editable value and does not concatenate
-        // provider-owned descendant labels.
-        if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var value))
-            return ((ValuePattern)value).Current.Value;
+            // The composer is a textarea: ValuePattern carries exactly the typed
+            // value and does not concatenate provider-owned descendant labels.
+            if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var value))
+                return ((ValuePattern)value).Current.Value;
 
-        // Fall back to rendered text nodes for accessibility providers where
-        // ValuePattern is unavailable.
-        var rendered = element.FindAll(
-                TreeScope.Descendants,
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text))
-            .Cast<AutomationElement>()
-            .Select(child => child.Current.Name)
-            .Where(value => !string.IsNullOrEmpty(value))
-            .ToArray();
-        if (rendered.Length > 0) return string.Concat(rendered);
-        if (element.TryGetCurrentPattern(TextPattern.Pattern, out var text)) return ((TextPattern)text).DocumentRange.GetText(-1);
-        return null;
+            // Fall back to rendered text nodes for accessibility providers where
+            // ValuePattern is unavailable.
+            var rendered = element.FindAll(
+                    TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text))
+                .Cast<AutomationElement>()
+                .Select(child => child.Current.Name)
+                .Where(value => !string.IsNullOrEmpty(value))
+                .ToArray();
+            if (rendered.Length > 0) return string.Concat(rendered);
+            if (element.TryGetCurrentPattern(TextPattern.Pattern, out var text)) return ((TextPattern)text).DocumentRange.GetText(-1);
+            return null;
         }
     }
 
-    // Name-only composer lookup used by the fallback scan. ClassName is
-    // deliberately not read here: Chromium exposes whole Tailwind class strings
-    // as ClassName, and caching those for a large tree is pure overhead.
-    private static AutomationElement? FindComposer(List<AutomationElement> elements, bool required)
-    {
-        var found = elements.Where(e => e.Cached.ControlType == ControlType.Edit && e.Cached.IsEnabled &&
-            ComposerNames.Any(name => e.Cached.Name.StartsWith(name, StringComparison.OrdinalIgnoreCase))).ToArray();
-        if (found.Length == 1) return found[0];
-        if (required) throw new ControlException(found.Length == 0 ? "ComposerNotFound" : "AmbiguousComposer", "当前页面无法唯一定位 ChatGPT 输入框。");
-        return null;
-    }
+    /// <summary>
+    /// The ReasoniX composer is recognized by its stable CSS class token,
+    /// falling back to the localized placeholder names when the provider does
+    /// not expose a class. Content reads never depend on a placeholder still
+    /// being displayed, so a filled composer stays locatable.
+    /// </summary>
+    private static bool IsComposer(AutomationElement candidate) =>
+        HasClassToken(candidate, ComposerClassToken) ||
+        ComposerNames.Any(name => SafeName(candidate).StartsWith(name, StringComparison.OrdinalIgnoreCase));
 
     // The fullscreen TV mirror can make Chromium report the composer as
     // offscreen even though it remains the focused editing control. Never use
@@ -1348,52 +1298,42 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
         if (!Monitor.TryEnter(AutomationSync, LockWait)) return null;
         try
         {
-        for (var attempt = 0; ; attempt++)
-        {
-            try
+            for (var attempt = 0; ; attempt++)
             {
-                var cache = new CacheRequest();
-                cache.Add(AutomationElement.NameProperty);
-                cache.Add(AutomationElement.ClassNameProperty);
-                cache.Add(AutomationElement.IsEnabledProperty);
-                cache.Add(AutomationElement.IsOffscreenProperty);
-                cache.Add(AutomationElement.HasKeyboardFocusProperty);
-                cache.Add(AutomationElement.BoundingRectangleProperty);
-                using (cache.Activate())
+                try
                 {
-                    var matches = root.FindAll(TreeScope.Descendants, EditCondition)
-                        .Cast<AutomationElement>()
-                        .Where(candidate => candidate.Cached.IsEnabled && IsComposer(candidate))
-                        .ToArray();
-                    if (matches.Length == 0) return null;
-                    return matches.FirstOrDefault(candidate => candidate.Cached.HasKeyboardFocus)
-                        ?? matches.FirstOrDefault(candidate => !candidate.Cached.IsOffscreen)
-                        ?? matches.OrderByDescending(candidate =>
-                            candidate.Cached.BoundingRectangle.Width * candidate.Cached.BoundingRectangle.Height).First();
+                    var cache = new CacheRequest();
+                    cache.Add(AutomationElement.NameProperty);
+                    cache.Add(AutomationElement.ClassNameProperty);
+                    cache.Add(AutomationElement.IsEnabledProperty);
+                    cache.Add(AutomationElement.IsOffscreenProperty);
+                    cache.Add(AutomationElement.HasKeyboardFocusProperty);
+                    cache.Add(AutomationElement.BoundingRectangleProperty);
+                    using (cache.Activate())
+                    {
+                        var matches = root.FindAll(TreeScope.Descendants, EditCondition)
+                            .Cast<AutomationElement>()
+                            .Where(candidate => candidate.Cached.IsEnabled && IsComposer(candidate))
+                            .ToArray();
+                        if (matches.Length == 0) return null;
+                        return matches.FirstOrDefault(candidate => candidate.Cached.HasKeyboardFocus)
+                            ?? matches.FirstOrDefault(candidate => !candidate.Cached.IsOffscreen)
+                            ?? matches.OrderByDescending(candidate =>
+                                candidate.Cached.BoundingRectangle.Width * candidate.Cached.BoundingRectangle.Height).First();
+                    }
+                }
+                catch (Exception) when (attempt < 1)
+                {
+                    Thread.Sleep(80);
+                }
+                catch (Exception)
+                {
+                    return null;
                 }
             }
-            catch (Exception) when (attempt < 1)
-            {
-                Thread.Sleep(80);
-            }
-            catch (Exception)
-            {
-                return null;
-            }
-        }
         }
         finally { Monitor.Exit(AutomationSync); }
     }
-
-    /// <summary>
-    /// The ChatGPT composer is recognized by its known placeholder names or,
-    /// when the UI language is unknown, by the ProseMirror editor class the app
-    /// actually uses. Content reads never depend on a placeholder still being
-    /// displayed, so a filled composer stays locatable.
-    /// </summary>
-    private static bool IsComposer(AutomationElement candidate) =>
-        ComposerNames.Any(name => candidate.Cached.Name.StartsWith(name, StringComparison.OrdinalIgnoreCase)) ||
-        string.Equals(candidate.Cached.ClassName, ComposerClassName, StringComparison.Ordinal);
 
     private static AutomationElement FindComposerRequired(AutomationElement root)
     {
@@ -1404,9 +1344,7 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
             // Accessibility may still be warming up; periodically fall back to a
             // plain Edit lookup in case the provider rejects the combined
             // property condition.
-            if (attempt >= 5 &&
-                FindComposer(FindByCondition(root, EditCondition), false) is { } scanned) return scanned;
-            if (attempt >= 20) throw new ControlException("ComposerNotFound", "当前页面无法唯一定位 ChatGPT 输入框。");
+            if (attempt >= 20) throw new ControlException("ComposerNotFound", "当前页面无法唯一定位 ReasoniX 输入框。");
             Thread.Sleep(100);
         }
     }
@@ -1424,24 +1362,12 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
     private static readonly Condition ButtonCondition =
         new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button);
 
-    private static readonly Condition TextCondition =
-        new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text);
-
-    private static readonly Condition ListCondition =
-        new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.List);
-
     private static readonly Condition ListItemCondition =
         new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem);
 
-    private static readonly Condition RadioButtonCondition =
-        new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.RadioButton);
-
-    private static readonly Condition CheckBoxCondition =
-        new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.CheckBox);
-
     /// <summary>
     /// Resolves a window handle to its UIA root without ever throwing: while the
-    /// app rebuilds its window Chromium answers FromHandle with
+    /// app rebuilds its window WebView2 answers FromHandle with
     /// UIA_E_ELEMENTNOTAVAILABLE, and that single call used to fail an entire
     /// action with an opaque AutomationFailed.
     /// </summary>
@@ -1450,31 +1376,6 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
         lock (AutomationSync)
         {
             try { return AutomationElement.FromHandle(handle); }
-            catch (Exception) { return null; }
-        }
-    }
-
-    /// <summary>
-    /// Parent lookup through the control view walker, serialized and never
-    /// throwing: while Chromium rebuilds its tree the walker answers
-    /// UIA_E_ELEMENTNOTAVAILABLE, and that exception used to escape
-    /// FindConfirmation and fail the whole status action.
-    /// </summary>
-    private static AutomationElement? TryParent(AutomationElement? element)
-    {
-        lock (AutomationSync)
-        {
-            if (element is null) return null;
-            try { return TreeWalker.ControlViewWalker.GetParent(element); }
-            catch (Exception) { return null; }
-        }
-    }
-
-    private static ControlType? TryControlType(AutomationElement element)
-    {
-        lock (AutomationSync)
-        {
-            try { return element.Current.ControlType; }
             catch (Exception) { return null; }
         }
     }
@@ -1499,32 +1400,32 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
         }
         try
         {
-        for (var attempt = 0; ; attempt++)
-        {
-            try
+            for (var attempt = 0; ; attempt++)
             {
-                var cache = new CacheRequest();
-                foreach (var property in new[]
-                         {
-                             AutomationElement.NameProperty, AutomationElement.ControlTypeProperty,
-                             AutomationElement.AutomationIdProperty, AutomationElement.IsEnabledProperty,
-                             AutomationElement.IsOffscreenProperty, AutomationElement.HasKeyboardFocusProperty
-                         })
-                    cache.Add(property);
-                using (cache.Activate())
-                    return scope.FindAll(TreeScope.Descendants, condition).Cast<AutomationElement>().ToList();
+                try
+                {
+                    var cache = new CacheRequest();
+                    foreach (var property in new[]
+                             {
+                                 AutomationElement.NameProperty, AutomationElement.ControlTypeProperty,
+                                 AutomationElement.AutomationIdProperty, AutomationElement.IsEnabledProperty,
+                                 AutomationElement.IsOffscreenProperty, AutomationElement.HasKeyboardFocusProperty
+                             })
+                        cache.Add(property);
+                    using (cache.Activate())
+                        return scope.FindAll(TreeScope.Descendants, condition).Cast<AutomationElement>().ToList();
+                }
+                catch (Exception) when (attempt < 1)
+                {
+                    Thread.Sleep(80);
+                }
+                catch (Exception)
+                {
+                    // A sustained provider-side failure stays local to this query:
+                    // status and the remote's confirm key still need an answer.
+                    return [];
+                }
             }
-            catch (Exception) when (attempt < 1)
-            {
-                Thread.Sleep(80);
-            }
-            catch (Exception)
-            {
-                // A sustained provider-side failure stays local to this query:
-                // status and the remote's confirm key still need an answer.
-                return [];
-            }
-        }
         }
         finally { Monitor.Exit(AutomationSync); }
     }
@@ -1583,10 +1484,34 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
         }
     }
 
-    /// <summary>Visible buttons whose accessible name is exactly one of the candidates.</summary>
-    private static List<AutomationElement> FindButtons(AutomationElement root, string[] names) =>
+    /// <summary>
+    /// Chromium exposes the web class attribute (a space-separated token list) as
+    /// the UIA ClassName, so a class is matched token by token instead of as a
+    /// whole string — ReasoniX appends state modifiers to the same element.
+    /// </summary>
+    private static bool HasClassToken(AutomationElement element, string token)
+    {
+        lock (AutomationSync)
+        {
+            try
+            {
+                var className = element.Cached.ClassName;
+                return className is not null &&
+                       className.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                           .Contains(token, StringComparer.Ordinal);
+            }
+            catch (Exception) { return false; }
+        }
+    }
+
+    /// <summary>
+    /// Visible buttons matching a stable class token, with localized accessible
+    /// names as the fallback path.
+    /// </summary>
+    private static List<AutomationElement> FindButtons(AutomationElement root, string classToken, string[] names) =>
         FindByCondition(root, ButtonCondition)
-            .Where(e => !SafeOffscreen(e) && names.Contains(SafeName(e), StringComparer.OrdinalIgnoreCase))
+            .Where(e => !SafeOffscreen(e) && (HasClassToken(e, classToken) ||
+                                              names.Any(name => SafeName(e).StartsWith(name, StringComparison.OrdinalIgnoreCase))))
             .ToList();
 
     private static void InvokeElement(AutomationElement element, string what)
@@ -1636,63 +1561,70 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
     }
 
     // ------------------------------------------------------------------
-    // Confirmation cards
+    // Confirmation cards (tool approval)
     // ------------------------------------------------------------------
 
-    private static AutomationElement? FindConfirmation(AutomationElement root)
-    {
-        var lists = FindByCondition(root, ListCondition)
-            .Where(e => ConfirmationListNames.Contains(SafeName(e), StringComparer.OrdinalIgnoreCase))
-            .ToArray();
-        if (lists.Length > 1) throw new ControlException("AmbiguousConfirmation", "有多个确认区域。");
-        if (lists.Length == 1) return TryParent(lists[0]);
-        var hints = FindByCondition(root, TextCondition)
-            .Where(e => ConfirmationHints.Any(hint => SafeName(e).StartsWith(hint, StringComparison.Ordinal)))
-            .ToArray();
-        if (hints.Length > 1) throw new ControlException("AmbiguousConfirmation", "有多个确认提示。");
-        if (hints.Length == 0) return null;
-        var parent = TryParent(hints[0]);
-        for (int i = 0; parent is not null && i < 6; i++, parent = TryParent(parent))
-        {
-            var type = TryControlType(parent);
-            if (type is null || type == ControlType.Document || type == ControlType.Window) break;
-            if (Options(parent).Count > 0) return parent;
-        }
-        return null;
-    }
+    /// <summary>
+    /// ReasoniX asks for tool approval with an in-chat card whose actions are
+    /// plain buttons (allow once / allow this session / always allow / deny).
+    /// The card is located by those action buttons; without them there is no
+    /// confirmation pending.
+    /// </summary>
+    private static List<AutomationElement> FindApprovalOptions(AutomationElement root) =>
+        FindByCondition(root, ButtonCondition)
+            .Where(e => !SafeOffscreen(e) &&
+                        (ApprovalAllowNames.Contains(SafeName(e), StringComparer.OrdinalIgnoreCase) ||
+                         ApprovalDenyNames.Contains(SafeName(e), StringComparer.OrdinalIgnoreCase)))
+            .ToList();
 
-    private static List<AutomationElement> Options(AutomationElement scope)
-    {
-        var options = new List<AutomationElement>();
-        foreach (var condition in new[] { ListItemCondition, RadioButtonCondition, CheckBoxCondition })
-            options.AddRange(FindByCondition(scope, condition).Where(IsEnabled));
-        return options;
-    }
+    private static bool HasConfirmation(AutomationElement root) =>
+        FindApprovalOptions(root).Count > 0;
 
     private static CommandResult Confirm(string action, WindowTarget target, AutomationElement root)
     {
-        var panel = FindConfirmation(root) ?? throw new ControlException("NoConfirmation", "当前页面没有确认信息。");
-        var options = Options(panel);
-        var buttons = FindButtons(panel, ConfirmationButtonNames);
-        if (action == "confirm.status") return CommandResult.Ok("当前确认信息", new { options = options.Select(Summarize), controls = buttons.Select(Summarize) });
+        var options = FindApprovalOptions(root);
+        if (options.Count == 0)
+            throw new ControlException("NoConfirmation", "当前页面没有确认信息。");
+        if (action == "confirm.status")
+            return CommandResult.Ok("当前确认信息", new { options = options.Select(Summarize) });
         if (action == "confirm.submit")
         {
-            var submit = buttons.Where(IsEnabled).ToArray();
-            if (submit.Length != 1)
-                throw new ControlException("ConfirmUnavailable", submit.Length > 1 ? "找到多个同名按钮，无法安全选择。" : "未找到可用的确认/提交按钮。");
+            // The allow-once action is ReasoniX's primary approval (option key
+            // "1" in the card); persistent grants stay a manual decision.
+            var submit = options.Where(e => IsEnabled(e) &&
+                    ApprovalAllowNames.Contains(SafeName(e), StringComparer.OrdinalIgnoreCase))
+                .OrderBy(e => Array.IndexOf(ApprovalAllowNames, SafeName(e)))
+                .ToArray();
+            if (submit.Length == 0)
+                throw new ControlException("ConfirmUnavailable", "确认卡片中没有可用的允许按钮。");
             NativeWindow.RequireForeground(target);
             InvokeElement(submit[0], "确认按钮");
-            return CommandResult.Ok("已提交当前确认信息。", new { state = "Dispatched" });
+            return CommandResult.Ok("已提交当前确认信息。", new { state = "Dispatched", option = SafeName(submit[0]) });
         }
-        if (options.Count == 0) throw new ControlException("NoOptions", "确认区域中没有可选择的选项。");
-        var current = options.FirstOrDefault(SafeFocused) ?? options.FirstOrDefault(IsSelected) ?? options[0];
-        current.SetFocus();
+        // ReasoniX's card is driven by digit shortcuts, not arrow keys, so
+        // up/down move real focus across the options and select invokes the
+        // focused one. Enter is never sent: it is the composer's send key.
+        var enabled = options.Where(IsEnabled).ToList();
+        if (enabled.Count == 0)
+            throw new ControlException("NoOptions", "确认卡片中没有可选择的选项。");
+        var current = enabled.FirstOrDefault(SafeFocused) ?? enabled[0];
+        var index = enabled.IndexOf(current);
+        var next = action switch
+        {
+            "confirm.up" => enabled[Math.Max(0, index - 1)],
+            "confirm.down" => enabled[Math.Min(enabled.Count - 1, index + 1)],
+            "confirm.select" => current,
+            _ => throw new ControlException("UnknownAction", action)
+        };
+        if (action == "confirm.select")
+        {
+            NativeWindow.RequireForeground(target);
+            InvokeElement(next, "确认选项");
+            return CommandResult.Ok("已选择当前确认项。", new { state = "Dispatched", option = SafeName(next) });
+        }
+        next.SetFocus();
         Thread.Sleep(50);
-        if (!Automation.Compare(AutomationElement.FocusedElement, current)) throw new ControlException("OptionFocusLost", "无法聚焦确认选项。");
-        NativeWindow.Key(target, action switch { "confirm.up" => 0x26, "confirm.down" => 0x28, "confirm.select" => 0x0D, _ => throw new ControlException("UnknownAction", action) });
-        Thread.Sleep(100);
-        return CommandResult.Ok(action == "confirm.select" ? "已选择当前选项；问答卡片可能还需要 confirm submit。" : "已切换确认选项。",
-            new { focused = AutomationElement.FocusedElement.Current.Name, state = "Dispatched" });
+        return CommandResult.Ok("已切换确认选项。", new { focused = SafeName(next), state = "Focused" });
     }
 
     private static bool IsSelected(AutomationElement element)
@@ -1713,6 +1645,15 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
         focused = SafeFocused(e),
         selected = IsSelected(e)
     };
+
+    private static ControlType? TryControlType(AutomationElement element)
+    {
+        lock (AutomationSync)
+        {
+            try { return element.Cached.ControlType; }
+            catch (Exception) { return null; }
+        }
+    }
 
     public void Dispose()
     {

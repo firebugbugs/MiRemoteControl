@@ -31,6 +31,8 @@
                       ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
     <ProjectReference Include="../../plugins/MiRemoteControl.Plugin.ChatGpt/MiRemoteControl.Plugin.ChatGpt.csproj"
                       ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="../../plugins/MiRemoteControl.Plugin.Reasonix/MiRemoteControl.Plugin.Reasonix.csproj"
+                      ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
     <ProjectReference Include="../../plugins/MiRemoteControl.Plugin.ZCode/MiRemoteControl.Plugin.ZCode.csproj"
                       ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
     <ProjectReference Include="../../plugins/MiRemoteControl.Plugin.XiaomiRemote/MiRemoteControl.Plugin.XiaomiRemote.csproj"
@@ -52,6 +54,8 @@
     <MakeDir Directories="$(OutDir)plugins/targets;$(OutDir)plugins/remotes" />
     <ZipDirectory SourceDirectory="$(_PluginsOutput)/MiRemoteControl.Plugin.ChatGpt/bin/$(Configuration)/$(_WindowsRuntimeFramework)"
                   DestinationFile="$(OutDir)plugins/targets/mrc.chatgpt.mrcplugin" Overwrite="true" />
+    <ZipDirectory SourceDirectory="$(_PluginsOutput)/MiRemoteControl.Plugin.Reasonix/bin/$(Configuration)/$(_WindowsRuntimeFramework)"
+                  DestinationFile="$(OutDir)plugins/targets/mrc.reasonix.mrcplugin" Overwrite="true" />
     <ZipDirectory SourceDirectory="$(_PluginsOutput)/MiRemoteControl.Plugin.ZCode/bin/$(Configuration)/$(_WindowsRuntimeFramework)"
                   DestinationFile="$(OutDir)plugins/targets/mrc.zcode.mrcplugin" Overwrite="true" />
     <ZipDirectory SourceDirectory="$(_PluginsOutput)/MiRemoteControl.Plugin.XiaomiRemote/bin/$(Configuration)/$(_WindowsRuntimeFramework)"

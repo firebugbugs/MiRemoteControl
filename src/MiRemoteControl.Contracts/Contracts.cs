@@ -131,6 +131,15 @@ public interface IRemotePluginHostContext
     Task<CommandResult> ExecuteAsync(string pluginId, string action, Dictionary<string, string>? arguments = null,
         CancellationToken ct = default);
     void Log(string source, Exception exception);
+    /// <summary>
+    /// True while any window of the desktop studio app (the Host owner:
+    /// the Mi Remote Studio main window, its dialogs or the TV big screen)
+    /// owns the system foreground. While it does, keys like Ok/Back belong to
+    /// the studio UI, so a remote plugin must not dispatch them into the
+    /// selected target as well. Always false on platforms without a global
+    /// foreground window.
+    /// </summary>
+    bool IsStudioForeground();
 }
 public static class Wire
 {

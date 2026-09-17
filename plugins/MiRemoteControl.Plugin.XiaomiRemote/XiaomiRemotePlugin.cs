@@ -287,13 +287,23 @@ public sealed class XiaomiRemotePlugin : IRemotePlugin, IAsyncRemotePlugin, IHos
         if (virtualInput) return;
         if (input.Button is "Back" or "Ok")
         {
+            // While the desktop studio (its main window, dialogs or the TV big
+            // screen) owns the foreground these keys belong to it: Ok becomes
+            // the studio's virtual power key, Back deletes inside the big
+            // screen. The selected target must not receive the same press too.
+            // A Back release still passes through so a repeat started before
+            // the studio took the foreground is always cancelled.
+            var studioOwnsForeground = host.IsStudioForeground();
             if (input.Button == "Back")
             {
-                // Hold-to-repeat: Back deletes while it stays pressed, like a
-                // keyboard backspace.
-                HandleBackKey(input.IsDown, host, ct);
+                if (!input.IsDown || !studioOwnsForeground)
+                {
+                    // Hold-to-repeat: Back deletes while it stays pressed, like a
+                    // keyboard backspace.
+                    HandleBackKey(input.IsDown, host, ct);
+                }
             }
-            else if (input.IsDown)
+            else if (input.IsDown && !studioOwnsForeground)
             {
                 var dispatch = false;
                 lock (_remoteCommandSync)

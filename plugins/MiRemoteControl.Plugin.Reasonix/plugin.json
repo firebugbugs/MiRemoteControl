@@ -1,0 +1,9 @@
+{
+  "id": "mrc.reasonix",
+  "name": "ReasoniX 控制",
+  "version": "0.1.0",
+  "kind": "target",
+  "apiVersion": 2,
+  "entryAssembly": "MiRemoteControl.Plugin.Reasonix.dll",
+  "entryType": "MiRemoteControl.Plugin.Reasonix.ReasonixPlugin"
+}
