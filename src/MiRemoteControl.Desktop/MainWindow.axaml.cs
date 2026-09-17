@@ -49,6 +49,13 @@ public partial class MainWindow : Window
     private DateTimeOffset _lastPowerCloseEventAt;
     private bool _powerCloseEventsInitialized;
     private bool _powerCloseRemoteHeld;
+    private DateTimeOffset _lastMenuEventAt;
+    private bool _menuEventsInitialized;
+    private bool _menuRemoteHeld;
+    private bool _menuSwitchBusy;
+    // Working-plugin card order as shown in the main window; the remote Menu
+    // key cycles through it so "next" matches what the user sees.
+    private readonly List<string> _orderedTargetPluginIds = new();
     private readonly Dictionary<string, DateTimeOffset> _cursorEventAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> _cursorMovedAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _cursorRemoteHeld = new(StringComparer.OrdinalIgnoreCase);
@@ -412,6 +419,7 @@ public partial class MainWindow : Window
         var targets = new List<TargetPluginView>();
         _loadedTargetPluginIds.Clear();
         _selectedTargetActions.Clear();
+        _orderedTargetPluginIds.Clear();
         if (state.TryGetProperty("plugins", out var plugins))
             foreach (var plugin in plugins.EnumerateArray())
             {
@@ -419,6 +427,7 @@ public partial class MainWindow : Window
                 if (string.IsNullOrWhiteSpace(pluginId) ||
                     (plugin.TryGetProperty("kind", out var kind) && kind.GetString() != PluginKinds.Target)) continue;
                 _loadedTargetPluginIds.Add(pluginId);
+                _orderedTargetPluginIds.Add(pluginId);
                 var name = plugin.TryGetProperty("name", out var nameValue) ? nameValue.GetString() ?? pluginId : pluginId;
                 var version = plugin.TryGetProperty("version", out var versionValue) ? versionValue.GetString() ?? "?" : "?";
                 var actions = plugin.TryGetProperty("actions", out var actionValues)
@@ -542,6 +551,7 @@ public partial class MainWindow : Window
     {
         _loadedTargetPluginIds.Clear();
         _selectedTargetActions.Clear();
+        _orderedTargetPluginIds.Clear();
         _targetPluginsSignature = "";
         RenderTargetPluginCards([]);
     }
@@ -883,6 +893,61 @@ public partial class MainWindow : Window
         ToggleWindowFromHomeKey();
     }
 
+    // The Menu key cycles the working Harness plugin. It only fires while this
+    // window owns the foreground: a press without focus merely brings the
+    // window forward (the same activation Home performs), so the next press
+    // switches. That keeps one keystroke from both stealing focus and silently
+    // re-pointing the remote at a different target.
+    private void HandleMenuFromRemote()
+    {
+        if (!IsMainWindowForeground())
+        {
+            if (Application.Current is App app) app.ShowMainWindow();
+            return;
+        }
+        _ = SwitchToNextHarnessPluginAsync();
+    }
+
+    private async Task SwitchToNextHarnessPluginAsync()
+    {
+        if (_menuSwitchBusy) return;
+        if (_orderedTargetPluginIds.Count == 0)
+        {
+            SetSelectedPluginStatus("没有可切换的工作插件。");
+            return;
+        }
+
+        // Wrap around: after the last card in the panel, switch back to the
+        // first. A selected plugin that is no longer listed restarts at the top.
+        var index = _orderedTargetPluginIds.FindIndex(id =>
+            string.Equals(id, _selectedPluginId, StringComparison.OrdinalIgnoreCase));
+        var nextId = _orderedTargetPluginIds[(index + 1) % _orderedTargetPluginIds.Count];
+
+        _menuSwitchBusy = true;
+        try
+        {
+            var result = await _client.InvokeAsync("core", "remote.select", new() { ["plugin"] = nextId }, timeoutMs: 3000);
+            if (!result.Success)
+            {
+                SetSelectedPluginStatus(result.Message);
+                return;
+            }
+            _selectedPluginId = nextId;
+            await LoadState();
+            ToolTip.SetTip(PowerButton, $"启动或关闭当前工作插件：{_selectedPluginName}");
+            SetSelectedPluginStatus($"已切换工作插件：{_selectedPluginName}");
+            await RefreshSelectedPluginPowerStateAsync(updateStatusText: false);
+        }
+        catch (Exception exception)
+        {
+            SetSelectedPluginStatus(exception.Message);
+        }
+        finally
+        {
+            _menuSwitchBusy = false;
+        }
+    }
+
     private bool HandleGlobalEscape()
     {
         if (_bigScreenTextWindow is null) return false;
@@ -908,6 +973,8 @@ public partial class MainWindow : Window
                             ref _tvRemoteHeld, ToggleBigScreenFromRemote);
                         HandleRemoteToggleInputs(remote, "Power", ref _powerCloseEventsInitialized, ref _lastPowerCloseEventAt,
                             ref _powerCloseRemoteHeld, CloseBigScreenText);
+                        HandleRemoteToggleInputs(remote, "Menu", ref _menuEventsInitialized, ref _lastMenuEventAt,
+                            ref _menuRemoteHeld, HandleMenuFromRemote);
                         HandleRemoteCursorInputs(remote);
                     });
                 }
@@ -972,7 +1039,7 @@ public partial class MainWindow : Window
         if (!remote.TryGetProperty("recentInputs", out var recent) || recent.ValueKind != JsonValueKind.Array) return;
         var entries = recent.EnumerateArray()
                      .Where(item => item.TryGetProperty("button", out var buttonValue) &&
-                                    buttonValue.GetString() is "Up" or "Down" or "Left" or "Right" or "Back")
+                                    buttonValue.GetString() is "Up" or "Down" or "Left" or "Right" or "Back" or "Ok")
                      .OrderBy(item => item.GetProperty("occurredAt").GetDateTimeOffset())
                      .ToArray();
         if (!_cursorEventsInitialized)
@@ -1016,6 +1083,17 @@ public partial class MainWindow : Window
                 continue;
             }
 
+            if (button.Equals("Ok", StringComparison.OrdinalIgnoreCase))
+            {
+                // The confirm key while the big screen owns editing: leave the
+                // screen first (committing its complete draft), then send. The
+                // target plugin refuses `send` during the mirror, so the remote
+                // plugin's own press of this key cannot dispatch a stale send.
+                if (!_cursorRemoteHeld.Add(button)) continue;
+                _ = HandleBigScreenConfirmAsync(screen);
+                continue;
+            }
+
             // A held direction key keeps reporting down events (~30/s) — that is
             // the remote's own key repeat, and every report moves the caret. The
             // tiny window only folds duplicated reports of a single press.
@@ -1027,6 +1105,64 @@ public partial class MainWindow : Window
             if (DateTimeOffset.UtcNow - screen.LastNavigationAt < TimeSpan.FromMilliseconds(150)) continue;
             screen.MoveCaret(button);
         }
+    }
+
+    /// <summary>
+    /// The remote's confirm key while the big screen owns editing. The screen
+    /// (not the remote plugin) knows the complete draft, so it leaves first —
+    /// committing that draft to the real editor — and only then the target is
+    /// asked to send. A failed commit keeps the screen open with its text.
+    /// </summary>
+    private async Task HandleBigScreenConfirmAsync(BigScreenTextWindow window)
+    {
+        if (!ReferenceEquals(_bigScreenTextWindow, window)) return;
+        var pluginId = _bigScreenProbePluginId ?? _selectedPluginId;
+        try
+        {
+            // Order decides how the gesture feels. First push the screen's own
+            // edits into the mirrored draft (a purely in-memory update), then close
+            // the screen so it disappears at once, and only then commit that draft to
+            // the real editor and send. Hiding the window instead of closing it does
+            // not work here: the big screen reclaims the foreground on its own, so a
+            // hidden window flickers straight back and the user presses again.
+            // Closing first is safe because a failed commit leaves the draft in the
+            // mirrored fallback, and reopening the screen reads it back through the
+            // standard input probe.
+            if (!await FlushBigScreenEditsAsync(window)) return;
+            window.Close();
+            var commit = await _client.InvokeAsync(
+                pluginId,
+                HarnessPluginActions.InputMirror,
+                new() { ["active"] = "false" },
+                timeoutMs: 60000);
+            if (!commit.Success)
+            {
+                SetSelectedPluginStatus($"TV 大屏内容提交失败：{commit.Message}（草稿仍在镜像中，按 TV 键可找回）");
+                return;
+            }
+            await SendBigScreenDraftAsync(pluginId);
+        }
+        catch (Exception exception)
+        {
+            // This runs from the remote event loop, so a failure must not
+            // vanish into an unobserved task.
+            SetSelectedPluginStatus($"TV 大屏确认失败：{exception.Message}");
+        }
+    }
+
+    private async Task SendBigScreenDraftAsync(string pluginId)
+    {
+        try
+        {
+            // A running task answers this key with stop, which the remote
+            // plugin already dispatched; sending on top of it would be wrong.
+            var status = await _client.InvokeAsync(pluginId, HarnessPluginActions.Status, timeoutMs: 4000);
+            if (!status.Success ||
+                (TryReadBool(status.Data, "canStop", out var canStop) && canStop)) return;
+            var send = await _client.InvokeAsync(pluginId, HarnessPluginActions.Send, timeoutMs: 15000);
+            SetSelectedPluginStatus(send.Message);
+        }
+        catch (Exception exception) { SetSelectedPluginStatus(exception.Message); }
     }
 
     private void StartBigScreenBackRepeat(BigScreenTextWindow window)
@@ -1345,22 +1481,7 @@ public partial class MainWindow : Window
     private async Task FlushAndCloseBigScreenAsync(BigScreenTextWindow window)
     {
         if (!ReferenceEquals(_bigScreenTextWindow, window)) return;
-        if (_bigScreenLocalDirty)
-        {
-            _bigScreenEditCancellation?.Cancel();
-            _bigScreenEditCancellation?.Dispose();
-            var cancellation = new CancellationTokenSource();
-            _bigScreenEditCancellation = cancellation;
-            var generation = _bigScreenEditGeneration;
-            _bigScreenEditTask = ReplaceBigScreenTextAsync(window, generation, cancellation, 0);
-            await _bigScreenEditTask;
-            if (_bigScreenLocalDirty)
-            {
-                VoiceTranslationStatus.Text = "TV 大屏内容尚未同步，已保留窗口，请稍后重试。";
-                window.FocusEditor();
-                return;
-            }
-        }
+        if (!await FlushBigScreenEditsAsync(window)) return;
         // Releasing the mirror is what commits the draft: the plugin writes
         // the complete text back in one operation and only then lets the real
         // editor be edited again. Keep the window open when that fails so the
@@ -1377,6 +1498,30 @@ public partial class MainWindow : Window
             return;
         }
         if (ReferenceEquals(_bigScreenTextWindow, window)) window.Close();
+    }
+
+    /// <summary>
+    /// Pushes the screen's own edits into the mirrored draft. This is the only part
+    /// of a confirm that has to run while the screen is still alive; committing the
+    /// draft to ChatGPT can happen after the screen is gone.
+    /// </summary>
+    private async Task<bool> FlushBigScreenEditsAsync(BigScreenTextWindow window)
+    {
+        if (!_bigScreenLocalDirty) return true;
+        _bigScreenEditCancellation?.Cancel();
+        _bigScreenEditCancellation?.Dispose();
+        var cancellation = new CancellationTokenSource();
+        _bigScreenEditCancellation = cancellation;
+        var generation = _bigScreenEditGeneration;
+        _bigScreenEditTask = ReplaceBigScreenTextAsync(window, generation, cancellation, 0);
+        await _bigScreenEditTask;
+        if (_bigScreenLocalDirty)
+        {
+            VoiceTranslationStatus.Text = "TV 大屏内容尚未同步，已保留窗口，请稍后重试。";
+            window.FocusEditor();
+            return false;
+        }
+        return true;
     }
 
     private void ToggleBigScreenFromRemote()
@@ -1509,6 +1654,16 @@ public partial class MainWindow : Window
             !element.TryGetProperty("running", out var value) ||
             value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return false;
         running = value.GetBoolean();
+        return true;
+    }
+
+    private static bool TryReadBool(object? data, string name, out bool value)
+    {
+        value = false;
+        if (data is not JsonElement { ValueKind: JsonValueKind.Object } element ||
+            !element.TryGetProperty(name, out var property) ||
+            property.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return false;
+        value = property.GetBoolean();
         return true;
     }
 

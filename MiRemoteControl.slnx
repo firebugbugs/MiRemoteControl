@@ -1,5 +1,7 @@
 <Solution>
   <Folder Name="/plugins/">
+    <!-- 内置插件（按 id 字母序）：ChatGPT 桌面版与 ZCode 是 target，小米遥控器是 remote。 -->
+    <Project Path="plugins/MiRemoteControl.Plugin.ChatGpt/MiRemoteControl.Plugin.ChatGpt.csproj" />
     <Project Path="plugins/MiRemoteControl.Plugin.XiaomiRemote/MiRemoteControl.Plugin.XiaomiRemote.csproj" />
     <Project Path="plugins/MiRemoteControl.Plugin.ZCode/MiRemoteControl.Plugin.ZCode.csproj" />
   </Folder>

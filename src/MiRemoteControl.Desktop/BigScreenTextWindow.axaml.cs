@@ -46,6 +46,15 @@ public partial class BigScreenTextWindow : Window
 
     private void OnEditorPreviewKeyDown(object? sender, KeyEventArgs e)
     {
+        // A bare Return must never reach the editor: the remote's confirm key can
+        // arrive as a real keyboard Return, and this screen owns that gesture.
+        // The stray newline used to become part of the draft, which was then
+        // committed and sent. Shift+Return still inserts a line break on purpose.
+        if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            e.Handled = true;
+            return;
+        }
         if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down)
             LastNavigationAt = DateTimeOffset.UtcNow;
     }
