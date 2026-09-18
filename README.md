@@ -2,11 +2,7 @@
 
 # Cheems遥控器
 
-**躺在沙发上，用遥控器写代码。**
-
-[![QQ](https://pub.idqqimg.com/wpa/images/group.png)](https://qm.qq.com/q/gmOiP7PLnW)
-
-QQ 交流群：**1094431427**（[点击加群](https://qm.qq.com/q/gmOiP7PLnW)）
+[![QQ群](https://img.shields.io/badge/QQ%E7%BE%A4-1094431427-12B7F5)](https://qm.qq.com/q/gmOiP7PLnW)
 
 ![首页](./.github/assets/home.png)
 
@@ -68,7 +64,6 @@ Set-Location .\artifacts\app
 
 新插件实现 `IHarnessPlugin`（target）或 `IRemotePlugin` + `IHostedRemotePlugin`（remote）即可扩展；插件包放 `plugins/targets|remotes/` 目录或从应用内市场安装。
 
-## 交流
+## 反馈
 
-- QQ 群：**1094431427** —— [点击加入【这里有个喵窝群】](https://qm.qq.com/q/gmOiP7PLnW)
 - Issue：[Gitee](https://gitee.com/unbengable/mi-remote-control/issues) / [GitHub](https://github.com/firebugbugs/MiRemoteControl/issues)
