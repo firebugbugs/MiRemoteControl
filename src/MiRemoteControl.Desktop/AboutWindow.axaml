@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="MiRemoteControl.Desktop.AboutWindow"
         Title="关于 Cheems遥控器" Icon="/Assets/head_portrait.ico"
-        Width="620" Height="310" MinWidth="620" MinHeight="310"
+        Width="620" Height="360" MinWidth="620" MinHeight="360"
         WindowStartupLocation="CenterOwner" WindowDecorations="None"
         ExtendClientAreaToDecorationsHint="True"
         TransparencyLevelHint="Transparent"
@@ -57,6 +57,14 @@
       <Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="9"/>
     </Style>
     <Style Selector="Button.icon-link:pointerover"><Setter Property="Background" Value="{DynamicResource About.LinkSurface}"/><Setter Property="BorderBrush" Value="{DynamicResource About.Accent}"/></Style>
+    <!-- Official site banner: deliberately heavier than the icon links. -->
+    <Style Selector="Button.site-link">
+      <Setter Property="Background" Value="#16856B"/><Setter Property="Foreground" Value="White"/>
+      <Setter Property="CornerRadius" Value="12"/><Setter Property="Padding" Value="16,12"/>
+      <Setter Property="Height" Value="58"/><Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+    </Style>
+    <Style Selector="Button.site-link:pointerover"><Setter Property="Background" Value="#0F6B55"/></Style>
     <Style Selector="Button.close">
       <Setter Property="Width" Value="42"/><Setter Property="Height" Value="38"/><Setter Property="Padding" Value="0"/>
       <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Foreground" Value="{DynamicResource About.TextSecondary}"/>
@@ -101,11 +109,22 @@
             </StackPanel>
           </Grid>
 
+          <Button Classes="site-link" Tag="https://miremote.cheems.cn" Click="OpenLink" ToolTip.Tip="打开官方网站下载最新版">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+              <Viewbox Width="20" Height="20" VerticalAlignment="Center"><Path Fill="White" Data="M11,4 H13 L13,12.6 L16.3,9.3 L17.7,10.7 L12,16.4 L6.3,10.7 L7.7,9.3 L11,12.6 Z M5,18.5 H19 L19,20.5 H5 Z"/></Viewbox>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock Text="官方网站 · 下载最新版" FontSize="14" FontWeight="SemiBold"/>
+                <TextBlock Text="miremote.cheems.cn" FontSize="11.5" Opacity="0.85"/>
+              </StackPanel>
+              <Path Grid.Column="2" Width="7" Height="12" Data="M2,1 L7,6 L2,11" Stroke="White" StrokeThickness="1.6" VerticalAlignment="Center"/>
+            </Grid>
+          </Button>
+
           <Border Background="{DynamicResource About.Surface}" BorderBrush="{DynamicResource About.Border}" BorderThickness="1" CornerRadius="12" Padding="14">
             <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto" RowSpacing="9">
               <TextBlock Text="项目信息" FontSize="13.5" FontWeight="SemiBold" Grid.ColumnSpan="2"/>
               <TextBlock Text="版本号" Grid.Row="1" Foreground="{DynamicResource About.TextSecondary}" FontSize="12.5"/>
-              <TextBlock Text="v1.0.0" Grid.Row="1" Grid.Column="1" FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+              <TextBlock Text="v0.0.1" Grid.Row="1" Grid.Column="1" FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Right"/>
               <TextBlock Text="作者" Grid.Row="2" Foreground="{DynamicResource About.TextSecondary}" FontSize="12.5"/>
               <TextBlock Text="Cheems" Grid.Row="2" Grid.Column="1" FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Right"/>
             </Grid>
