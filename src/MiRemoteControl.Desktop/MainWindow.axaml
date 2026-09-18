@@ -285,7 +285,7 @@
                   </Grid>
                 </Border>
                 <ToggleButton Name="TvButton" Classes="circle" Canvas.Left="112" Canvas.Top="438" Tag="Tv" Click="RemoteButtonClick" ToolTip.Tip="模拟电视键"><Viewbox Width="25" Height="25"><Grid Width="28" Height="28"><Border Width="23" Height="16" CornerRadius="4" BorderBrush="#C7C9C7" BorderThickness="1.6"/><TextBlock Text="TV" Foreground="#C7C9C7" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/></Grid></Viewbox></ToggleButton>
-                <Viewbox Width="19" Height="21" Canvas.Left="92.5" Canvas.Top="588"><Grid Width="20" Height="22"><Path Data="M4,18 L4,4 L8,4 L16,14 L16,18 L13,18 L7,10 L7,18 Z" Fill="#515552"/><Path Data="M10,4 L16,4 L16,11 Z" Fill="#515552"/><Path Data="M8,6 L14,6 L14,12 Z" Fill="#D4D5D2"/></Grid></Viewbox>
+                <Viewbox Width="19" Height="21" Canvas.Left="92.5" Canvas.Top="588"><Grid Width="20" Height="22"><Path Data="M4.2,3.6 L4.2,18.4" Stroke="#515552" StrokeThickness="3.2" StrokeLineCap="Round"/><Path Data="M15.8,3.6 L15.8,18.4" Stroke="#515552" StrokeThickness="3.2" StrokeLineCap="Round"/><Path Data="M5.2,4.9 C9.3,9.2 10.7,12.8 14.8,17.1" Stroke="#515552" StrokeThickness="3.2" StrokeLineCap="Round"/></Grid></Viewbox>
                 <TextBlock Text="x i a o m i" Canvas.Left="52" Canvas.Top="723" Width="100" TextAlignment="Center" FontSize="14.5" FontWeight="SemiBold" Foreground="#454946"/>
               </Canvas>
             </Grid>
