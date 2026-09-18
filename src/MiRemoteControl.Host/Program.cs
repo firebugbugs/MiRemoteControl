@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -246,7 +247,20 @@ static async Task RunAsync(Process owner)
             plugin.Kind == PluginKinds.Remote &&
             string.Equals(plugin.Id, pluginId, StringComparison.OrdinalIgnoreCase));
         if (descriptor is null)
-            return CommandResult.Fail("PluginNotFound", $"未找到遥控器插件：{pluginId}");
+        {
+            // A plugin the UI installed after startup is on disk but not in
+            // the catalog yet; load it on demand so switching works without
+            // restarting the app.
+            if (TryLoadInstalledRemotePlugin(pluginId, out var loadError))
+            {
+                descriptor = catalog.Descriptors.FirstOrDefault(plugin =>
+                    plugin.Kind == PluginKinds.Remote &&
+                    string.Equals(plugin.Id, pluginId, StringComparison.OrdinalIgnoreCase));
+                if (descriptor is not null) catalog.Errors.Remove("未找到遥控器插件。");
+            }
+            if (descriptor is null)
+                return CommandResult.Fail("PluginNotFound", $"未找到遥控器插件：{pluginId}（{loadError ?? "未安装"}）");
+        }
         if (string.Equals(selectedRemotePluginId, descriptor.Id, StringComparison.OrdinalIgnoreCase))
             return CommandResult.Ok($"当前遥控器插件已经是 {descriptor.Name}。",
                 new { selectedRemotePlugin = selectedRemotePluginId });
@@ -261,6 +275,52 @@ static async Task RunAsync(Process owner)
         selectedRemotePluginId = descriptor.Id;
         return CommandResult.Ok($"当前遥控器插件已切换为 {descriptor.Name}。",
             new { selectedRemotePlugin = selectedRemotePluginId });
+    }
+
+    bool TryLoadInstalledRemotePlugin(string pluginId, out string? error)
+    {
+        error = null;
+        try
+        {
+            var candidates = new List<string>();
+            // pluginId arrives from IPC; never let it steer a path outside the
+            // remotes folder — the manifest id inside the package decides.
+            if (pluginId.IndexOfAny(Path.GetInvalidFileNameChars()) < 0)
+            {
+                var exact = Path.Combine(remotePluginDirectory, pluginId + ".mrcplugin");
+                if (File.Exists(exact)) candidates.Add(exact);
+            }
+            if (Directory.Exists(remotePluginDirectory))
+                candidates.AddRange(Directory.EnumerateFiles(remotePluginDirectory)
+                    .Where(file => candidates.All(seen => !string.Equals(seen, file, StringComparison.OrdinalIgnoreCase))));
+            foreach (var file in candidates)
+            {
+                if (!TryReadBundleId(file, out var id) ||
+                    !string.Equals(id, pluginId, StringComparison.OrdinalIgnoreCase)) continue;
+                if (catalog.TryLoadPluginBundle(file, PluginKinds.Remote, out var loadError)) return true;
+                error = loadError;
+            }
+            error ??= "目录中没有该插件的安装包";
+        }
+        catch (Exception exception) { error = exception.Message; }
+        return false;
+    }
+
+    static bool TryReadBundleId(string path, out string? id)
+    {
+        id = null;
+        try
+        {
+            using var archive = ZipFile.OpenRead(path);
+            var manifest = archive.Entries.SingleOrDefault(entry =>
+                string.Equals(entry.FullName.Replace('\\', '/').TrimStart('/'), "plugin.json", StringComparison.OrdinalIgnoreCase));
+            if (manifest is null) return false;
+            using var stream = manifest.Open();
+            using var document = JsonDocument.Parse(stream);
+            id = document.RootElement.TryGetProperty("id", out var idValue) ? idValue.GetString() : null;
+            return !string.IsNullOrWhiteSpace(id);
+        }
+        catch { return false; }
     }
 
     async Task<CommandResult> ExecuteRemoteAsync(

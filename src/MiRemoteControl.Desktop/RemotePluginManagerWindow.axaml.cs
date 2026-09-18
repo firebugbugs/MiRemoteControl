@@ -367,7 +367,7 @@ public partial class RemotePluginManagerWindow : Window
             binding.Pause.IsVisible = false;
             binding.Cancel.IsVisible = false;
             binding.Progress.IsVisible = false;
-            binding.Status.Text = $"v{installed.Version} 已安装，重启软件后在本地列表中选择使用。";
+            binding.Status.Text = $"v{installed.Version} 已安装，可在上方本地列表中选择使用。";
             return;
         }
 

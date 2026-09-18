@@ -16,11 +16,20 @@ public sealed class PluginCatalog : IDisposable
     private readonly Dictionary<string, string> _sourcePaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, byte[]> _icons = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<AssemblyLoadContext> _contexts = [];
+    // Mutations can now happen at runtime (on-demand loads of plugins the UI
+    // installed after startup), so the reader-facing snapshots must lock too.
+    private readonly object _sync = new();
     private readonly string _cacheDirectory;
 
     public List<string> Errors { get; } = [];
-    public IReadOnlyList<PluginDescriptor> Descriptors => _plugins.Values.Select(p => p.Descriptor).ToArray();
-    public IReadOnlyDictionary<string, string> SourcePaths => _sourcePaths;
+    public IReadOnlyList<PluginDescriptor> Descriptors
+    {
+        get { lock (_sync) return _plugins.Values.Select(p => p.Descriptor).ToArray(); }
+    }
+    public IReadOnlyDictionary<string, string> SourcePaths
+    {
+        get { lock (_sync) return new Dictionary<string, string>(_sourcePaths, StringComparer.OrdinalIgnoreCase); }
+    }
 
     public PluginCatalog(string directory, string? cacheDirectory = null)
     {
@@ -176,8 +185,36 @@ public sealed class PluginCatalog : IDisposable
         return icon;
     }
 
-    public byte[]? GetIcon(string pluginId) =>
-        _icons.TryGetValue(pluginId, out var icon) ? icon : null;
+    public byte[]? GetIcon(string pluginId)
+    {
+        lock (_sync) return _icons.TryGetValue(pluginId, out var icon) ? icon : null;
+    }
+
+    /// <summary>
+    /// Loads a bundle that appeared on disk after startup — the plugin manager
+    /// installs downloaded remote plugins into the remotes folder without a
+    /// restart, and remote.driver.select hot-loads them through this path.
+    /// Duplicate IDs and invalid packages surface as errors, not exceptions.
+    /// </summary>
+    public bool TryLoadPluginBundle(string bundlePath, string expectedKind, out string? error)
+    {
+        error = null;
+        if (!File.Exists(bundlePath))
+        {
+            error = "插件包不存在。";
+            return false;
+        }
+        try
+        {
+            lock (_sync) LoadBundle(bundlePath, expectedKind);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            error = exception.GetBaseException().Message;
+            return false;
+        }
+    }
 
     private static string FolderForKind(string kind) =>
         string.Equals(kind, PluginKinds.Remote, StringComparison.OrdinalIgnoreCase)

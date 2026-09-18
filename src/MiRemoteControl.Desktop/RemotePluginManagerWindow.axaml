@@ -46,7 +46,7 @@
         <StackPanel Spacing="18">
           <StackPanel>
             <TextBlock Text="本地插件" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource Plugin.Text}"/>
-            <TextBlock Text="在这里选择当前使用的遥控器插件，切换立即生效。更新或新装需要重启软件加载。" Margin="0,4,0,0" FontSize="12" Foreground="{DynamicResource Plugin.Muted}"/>
+            <TextBlock Text="在这里选择当前使用的遥控器插件，切换立即生效；新安装的插件同样可以直接选用。" Margin="0,4,0,0" FontSize="12" Foreground="{DynamicResource Plugin.Muted}"/>
           </StackPanel>
           <StackPanel Name="LocalPluginsPanel" Spacing="10"/>
           <Border Height="1" Background="{DynamicResource Plugin.Border}"/>
