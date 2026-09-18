@@ -2,6 +2,7 @@
 
 # Cheems遥控器
 
+[![下载](https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD_Cheems%E9%81%A5%E6%8E%A7%E5%99%A8-v0.0.1-16856B)](https://miremote.cheems.cn)
 [![QQ群](https://img.shields.io/badge/QQ%E7%BE%A4-1094431427-12B7F5)](https://qm.qq.com/q/gmOiP7PLnW)
 
 ![首页](./.github/assets/home.png)
@@ -19,9 +20,10 @@ Cheems遥控器（MiRemoteControl）是一个 Windows 桌面应用：把小米�
 
 ## 下载
 
+**[⬇ 在线下载页](https://miremote.cheems.cn)** —— 点开即下，始终是最新版
+
 | 渠道 | 地址 |
 | --- | --- |
-| 官网（推荐） | https://miremote.cheems.cn |
 | Gitee Release | https://gitee.com/unbengable/mi-remote-control/releases |
 | GitHub Release | https://github.com/firebugbugs/MiRemoteControl/releases |
 
