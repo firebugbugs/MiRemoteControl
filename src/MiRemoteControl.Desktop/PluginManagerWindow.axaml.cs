@@ -7,6 +7,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using MiRemoteControl.Contracts;
 using MiRemoteControl.Desktop.Infrastructure;
 
 namespace MiRemoteControl.Desktop;
@@ -27,7 +28,7 @@ public partial class PluginManagerWindow : Window
     private readonly Dictionary<string, CloudBinding> _cloudBindings = new(StringComparer.OrdinalIgnoreCase);
     private string _installedSignature = "";
 
-    public PluginManagerWindow() : this(Path.Combine(AppContext.BaseDirectory, "plugins", "targets"))
+    public PluginManagerWindow() : this(Path.Combine(PluginFolders.ResolvePluginRoot(), PluginFolders.Targets))
     {
     }
 
@@ -35,7 +36,10 @@ public partial class PluginManagerWindow : Window
     {
         _targetPluginDirectory = Path.GetFullPath(targetPluginDirectory);
         InitializeComponent();
-        Directory.CreateDirectory(_targetPluginDirectory);
+        // An installed copy may point at a read-only location until the host
+        // status supplies the real per-user directory; failing to create it
+        // must not take the window (and with it the process) down.
+        try { Directory.CreateDirectory(_targetPluginDirectory); } catch { }
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _timer.Tick += (_, _) => RefreshUi();

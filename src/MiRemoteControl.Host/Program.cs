@@ -21,7 +21,7 @@ using (var singleton = new Mutex(true, Wire.PipeName, out var isNew))
 
 static async Task RunAsync(Process owner)
 {
-    var pluginDirectory = Path.Combine(AppContext.BaseDirectory, "plugins");
+    var pluginDirectory = PluginFolders.ResolvePluginRoot();
     var remotePluginDirectory = Path.Combine(pluginDirectory, PluginFolders.Remotes);
     var targetPluginDirectory = Path.Combine(pluginDirectory, PluginFolders.Targets);
     Directory.CreateDirectory(remotePluginDirectory);

@@ -30,9 +30,9 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, bool> _voiceModelLoadedFlags = new(StringComparer.OrdinalIgnoreCase);
     private bool _started;
     private bool _loading;
-    private string _pluginDirectory = Path.Combine(AppContext.BaseDirectory, "plugins");
-    private string _targetPluginDirectory = Path.Combine(AppContext.BaseDirectory, "plugins", "targets");
-    private string _remotePluginDirectory = Path.Combine(AppContext.BaseDirectory, "plugins", "remotes");
+    private string _pluginDirectory = PluginFolders.ResolvePluginRoot();
+    private string _targetPluginDirectory = Path.Combine(PluginFolders.ResolvePluginRoot(), PluginFolders.Targets);
+    private string _remotePluginDirectory = Path.Combine(PluginFolders.ResolvePluginRoot(), PluginFolders.Remotes);
     private string _selectedPluginId = "";
     private string _selectedPluginName = "目标插件";
     private string _selectedRemotePluginId = "";
@@ -707,32 +707,47 @@ public partial class MainWindow : Window
 
     private async void OpenModelManager(object? sender, RoutedEventArgs e)
     {
-        var manager = new ModelManagerWindow(_voiceModelDirectory, _selectedVoiceModelId);
-        await manager.ShowDialog(this);
-        await _client.InvokeAsync("core", "voice.models", timeoutMs: 5000);
-        _voiceModelsSignature = "";
-        await LoadState();
+        try
+        {
+            var manager = new ModelManagerWindow(_voiceModelDirectory, _selectedVoiceModelId);
+            await manager.ShowDialog(this);
+            await _client.InvokeAsync("core", "voice.models", timeoutMs: 5000);
+        }
+        catch (Exception exception) { VoiceTranslationStatus.Text = $"模型管理出错：{exception.Message}"; }
+        finally
+        {
+            _voiceModelsSignature = "";
+            await LoadState();
+        }
     }
 
     private async void OpenPluginManager(object? sender, RoutedEventArgs e)
     {
-        var manager = new PluginManagerWindow(_targetPluginDirectory);
-        await manager.ShowDialog(this);
-        await LoadState();
+        try
+        {
+            var manager = new PluginManagerWindow(_targetPluginDirectory);
+            await manager.ShowDialog(this);
+        }
+        catch (Exception exception) { VoiceTranslationStatus.Text = $"插件管理出错：{exception.Message}"; }
+        finally { await LoadState(); }
     }
 
     private async void OpenRemotePluginManager(object? sender, RoutedEventArgs e)
     {
-        var manager = new RemotePluginManagerWindow(
-            _remotePluginDirectory,
-            _selectedRemotePluginId,
-            async pluginId =>
-            {
-                var result = await _client.InvokeAsync("core", "remote.driver.select", new() { ["plugin"] = pluginId }, timeoutMs: 3000);
-                return (result.Success, result.Message);
-            });
-        await manager.ShowDialog(this);
-        await LoadState();
+        try
+        {
+            var manager = new RemotePluginManagerWindow(
+                _remotePluginDirectory,
+                _selectedRemotePluginId,
+                async pluginId =>
+                {
+                    var result = await _client.InvokeAsync("core", "remote.driver.select", new() { ["plugin"] = pluginId }, timeoutMs: 3000);
+                    return (result.Success, result.Message);
+                });
+            await manager.ShowDialog(this);
+        }
+        catch (Exception exception) { VoiceTranslationStatus.Text = $"遥控器插件出错：{exception.Message}"; }
+        finally { await LoadState(); }
     }
 
     private async void CheckAppUpdate(object? sender, RoutedEventArgs e)

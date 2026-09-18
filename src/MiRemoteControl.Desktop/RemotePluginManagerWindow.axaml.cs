@@ -7,6 +7,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using MiRemoteControl.Contracts;
 using MiRemoteControl.Desktop.Infrastructure;
 
 namespace MiRemoteControl.Desktop;
@@ -33,7 +34,7 @@ public partial class RemotePluginManagerWindow : Window
     private string _activePluginId;
 
     public RemotePluginManagerWindow() : this(
-        Path.Combine(AppContext.BaseDirectory, "plugins", "remotes"), null, _ => Task.FromResult((false, "占位构造不可用。")))
+        Path.Combine(PluginFolders.ResolvePluginRoot(), PluginFolders.Remotes), null, _ => Task.FromResult((false, "占位构造不可用。")))
     {
     }
 
@@ -46,7 +47,9 @@ public partial class RemotePluginManagerWindow : Window
         _activePluginId = activePluginId ?? "";
         _selectDriver = selectDriver;
         InitializeComponent();
-        Directory.CreateDirectory(_remotePluginDirectory);
+        // Same guard as PluginManagerWindow: a read-only directory must not
+        // crash the process; the empty local list already communicates it.
+        try { Directory.CreateDirectory(_remotePluginDirectory); } catch { }
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _timer.Tick += (_, _) => RefreshUi();

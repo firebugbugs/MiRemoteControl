@@ -97,6 +97,31 @@ public static class PluginFolders
 {
     public const string Targets = "targets";
     public const string Remotes = "remotes";
+
+    /// <summary>
+    /// Plugin root resolution shared by the host and the desktop windows:
+    /// the folder next to the executable (dev/portable layout) when it is
+    /// writable, otherwise the per-user LocalAppData location. An installed
+    /// copy under Program Files cannot create or install plugins without
+    /// elevation, so it must fall back to the user profile.
+    /// </summary>
+    public static string ResolvePluginRoot()
+    {
+        var besideApp = Path.Combine(AppContext.BaseDirectory, "plugins");
+        try
+        {
+            var probe = Path.Combine(besideApp, ".write-probe-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(probe);
+            Directory.Delete(probe);
+            return besideApp;
+        }
+        catch (Exception)
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MiRemoteControl", "plugins");
+        }
+    }
 }
 public record PluginDescriptor(string Id, string Name, string Version, IReadOnlyList<ActionDescriptor> Actions, string Kind = PluginKinds.Target);
 public interface IHarnessPlugin : IDisposable
