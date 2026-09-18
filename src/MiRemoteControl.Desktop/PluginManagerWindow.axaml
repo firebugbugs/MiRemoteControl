@@ -46,7 +46,7 @@
         <StackPanel Spacing="18">
           <StackPanel>
             <TextBlock Text="本地插件" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource Plugin.Text}"/>
-            <TextBlock Text="已安装插件的版本与位置。更新后重启软件即可加载新版本。" Margin="0,4,0,0" FontSize="12" Foreground="{DynamicResource Plugin.Muted}"/>
+            <TextBlock Text="已安装插件的版本与位置。新装插件即时加载；覆盖更新需重启软件后生效。" Margin="0,4,0,0" FontSize="12" Foreground="{DynamicResource Plugin.Muted}"/>
           </StackPanel>
           <StackPanel Name="LocalPluginsPanel" Spacing="10"/>
           <Border Height="1" Background="{DynamicResource Plugin.Border}"/>

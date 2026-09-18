@@ -44,6 +44,10 @@ static async Task RunAsync(Process owner)
         .ThenBy(plugin => plugin.Id, StringComparer.OrdinalIgnoreCase)
         .Select(plugin => plugin.Id)
         .FirstOrDefault();
+    // The plugin manager installs bundles at runtime; status compares each
+    // plugin directory's mtime against the last scan and loads newcomers, so
+    // the desktop's plugin list reflects an install on its next poll.
+    var pluginScanStamps = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
 
     var context = new HostPluginContext(
         catalog,
@@ -167,6 +171,7 @@ static async Task RunAsync(Process owner)
 
     async Task<CommandResult> CoreStatusAsync(CancellationToken ct)
     {
+        ScanForNewPlugins();
         var remoteStatus = await ExecuteRemoteAsync("status", null, ct);
         if (!remoteStatus.Success)
             return CommandResult.Fail(remoteStatus.Code, remoteStatus.Message);
@@ -196,17 +201,21 @@ static async Task RunAsync(Process owner)
         });
     }
 
-    object PluginSummary() => new
+    object PluginSummary()
     {
-        pluginDirectory,
-        remotePluginDirectory,
-        targetPluginDirectory,
-        selectedPlugin = selectedTargetPluginId,
-        selectedRemotePlugin = selectedRemotePluginId,
-        plugins = catalog.Descriptors,
-        pluginSources = catalog.SourcePaths.Select(item => new { id = item.Key, path = item.Value }),
-        errors = catalog.Errors
-    };
+        ScanForNewPlugins();
+        return new
+        {
+            pluginDirectory,
+            remotePluginDirectory,
+            targetPluginDirectory,
+            selectedPlugin = selectedTargetPluginId,
+            selectedRemotePlugin = selectedRemotePluginId,
+            plugins = catalog.Descriptors,
+            pluginSources = catalog.SourcePaths.Select(item => new { id = item.Key, path = item.Value }),
+            errors = catalog.Errors
+        };
+    }
 
     // Icons are served on demand instead of inside the frequent status
     // payload: each package icon is a few KB of base64 that never changes
@@ -321,6 +330,31 @@ static async Task RunAsync(Process owner)
             return !string.IsNullOrWhiteSpace(id);
         }
         catch { return false; }
+    }
+
+    void ScanForNewPlugins()
+    {
+        foreach (var (directory, kind) in new[]
+                 { (targetPluginDirectory, PluginKinds.Target), (remotePluginDirectory, PluginKinds.Remote) })
+        {
+            try
+            {
+                if (!Directory.Exists(directory)) continue;
+                var stamp = Directory.GetLastWriteTimeUtc(directory);
+                if (pluginScanStamps.TryGetValue(directory, out var last) && last >= stamp) continue;
+                pluginScanStamps[directory] = stamp;
+                var known = new HashSet<string>(
+                    catalog.Descriptors.Select(descriptor => descriptor.Id), StringComparer.OrdinalIgnoreCase);
+                foreach (var file in Directory.EnumerateFiles(directory))
+                {
+                    if (!TryReadBundleId(file, out var id) || string.IsNullOrWhiteSpace(id) || known.Contains(id!)) continue;
+                    if (!catalog.TryLoadPluginBundle(file, kind, out _)) continue;
+                    known.Add(id!);
+                    if (kind == PluginKinds.Remote) catalog.Errors.Remove("未找到遥控器插件。");
+                }
+            }
+            catch { /* a failed scan must never break the status payload */ }
+        }
     }
 
     async Task<CommandResult> ExecuteRemoteAsync(

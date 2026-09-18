@@ -322,7 +322,7 @@ public partial class PluginManagerWindow : Window
             binding.Pause.IsVisible = false;
             binding.Cancel.IsVisible = false;
             binding.Progress.IsVisible = false;
-            binding.Status.Text = $"v{installed.Version} 已安装，重启软件后生效。";
+            binding.Status.Text = $"v{installed.Version} 已安装，插件控制列表会自动显示；覆盖更新的版本需重启软件后生效。";
             return;
         }
 
