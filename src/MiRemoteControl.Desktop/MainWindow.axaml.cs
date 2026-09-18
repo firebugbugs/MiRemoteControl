@@ -736,48 +736,221 @@ public partial class MainWindow : Window
     {
         if (sender is Control control) control.IsEnabled = false;
         VoiceTranslationStatus.Text = "正在检查更新…";
-        var result = await CheckUpdateManifestAsync("https://download.cheems.cn/v1/manifests/app/stable.json");
-        VoiceTranslationStatus.Text = result;
+        var check = await CheckAppUpdateAsync("https://download.cheems.cn/v1/manifests/app/stable.json");
+        VoiceTranslationStatus.Text = check.StatusBarText;
         if (sender is Control button) button.IsEnabled = true;
-        await ShowUpdateResultAsync(result);
+        await ShowUpdateWindowAsync(check);
     }
 
-    private static async Task<string> CheckUpdateManifestAsync(string url)
+    private enum UpdateState { Latest, Available, Failed }
+
+    private sealed record AppUpdateCheck(
+        string StatusBarText,
+        UpdateState State,
+        string CurrentVersion,
+        string? NewVersion = null,
+        string? Notes = null,
+        string? Error = null,
+        List<(string Mirror, string Url)> Mirrors = null!);
+
+    private static async Task<AppUpdateCheck> CheckAppUpdateAsync(string url)
     {
+        var current = typeof(MainWindow).Assembly.GetName().Version ?? new Version(0, 0, 1);
+        var currentShort = new Version(current.Major, current.Minor, current.Build);
         try
         {
             using var response = await UpdateHttp.GetAsync(url);
             response.EnsureSuccessStatusCode();
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             var root = document.RootElement;
-            if (!root.TryGetProperty("available", out var available) || !available.GetBoolean()) return "暂无更新内容。";
-            var version = root.TryGetProperty("version", out var value) ? value.GetString() : null;
-            return string.IsNullOrWhiteSpace(version) ? "发现可用更新。" : $"发现新版本 {version}。";
+            var versionText = root.TryGetProperty("version", out var versionValue) ? versionValue.GetString() : null;
+            if (!root.TryGetProperty("available", out var available) || !available.GetBoolean() ||
+                !Version.TryParse((versionText ?? "").TrimStart('v', 'V'), out var manifestVersion) ||
+                manifestVersion <= currentShort)
+                return new AppUpdateCheck($"已是最新版本（v{currentShort}）。", UpdateState.Latest, currentShort.ToString());
+
+            var notes = root.TryGetProperty("notes", out var notesValue) ? notesValue.GetString() : null;
+            var mirrors = new List<(string Mirror, string Url)>();
+            if (root.TryGetProperty("downloads", out var downloads) && downloads.ValueKind == JsonValueKind.Array)
+                foreach (var download in downloads.EnumerateArray())
+                    if (download.TryGetProperty("mirror", out var mirror) && mirror.GetString() is { Length: > 0 } mirrorName &&
+                        download.TryGetProperty("url", out var mirrorUrl) && mirrorUrl.GetString() is { Length: > 0 } urlText)
+                        mirrors.Add((mirrorName, urlText));
+            return new AppUpdateCheck($"发现新版本 v{versionText}。", UpdateState.Available,
+                currentShort.ToString(), versionText, notes, Mirrors: mirrors);
         }
-        catch (Exception exception) { return $"检查更新失败：{exception.Message}"; }
+        catch (Exception exception)
+        {
+            return new AppUpdateCheck($"检查更新失败：{exception.Message}", UpdateState.Failed,
+                currentShort.ToString(), Error: exception.Message);
+        }
     }
 
-    private async Task ShowUpdateResultAsync(string message)
+    private async Task ShowUpdateWindowAsync(AppUpdateCheck check)
     {
+        IObservable<object?> Res(string key) => this.GetResourceObservable(key, v => v as IBrush);
+        IBrush? BrushOf(string key) => this.Resources.TryGetResource(key, ActualThemeVariant, out var value) ? value as IBrush : null;
+        void OpenExternal(string url)
+        {
+            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
+        }
+
         var dialog = new Window
         {
-            Title = "检查更新",
-            Width = 380,
-            Height = 176,
+            Title = "软件更新",
+            Width = 440,
+            Height = check.State == UpdateState.Available ? 356 : 248,
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            WindowDecorations = WindowDecorations.None,
+            ExtendClientAreaToDecorationsHint = true,
+            TransparencyLevelHint = [WindowTransparencyLevel.Transparent],
+            Background = Brushes.Transparent,
         };
-        var ok = new Button
+
+        // Title bar in the same language as the manager windows: drag strip,
+        // brand icon, centered-close on the right.
+        var titleBar = new Border { Height = 48, CornerRadius = new CornerRadius(9, 9, 0, 0) };
+        titleBar.Bind(Border.BackgroundProperty, Res("Theme.Surface"));
+        titleBar.Bind(Border.BorderBrushProperty, Res("Theme.Border"));
+        titleBar.PointerPressed += (_, e) => { if (e.GetCurrentPoint(dialog).Properties.IsLeftButtonPressed) dialog.BeginMoveDrag(e); };
+        var titleText = new TextBlock { Text = "软件更新", FontSize = 14, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+        titleText.Bind(TextBlock.ForegroundProperty, Res("Theme.TextPrimary"));
+        var closeGlyph = new Avalonia.Controls.Shapes.Path { Width = 12, Height = 12, StrokeThickness = 1.25, Data = PathGeometry.Parse("M1.5,1.5 L10.5,10.5 M10.5,1.5 L1.5,10.5") };
+        closeGlyph.Bind(Avalonia.Controls.Shapes.Path.StrokeProperty, Res("Theme.TextSecondary"));
+        var closeGlyphHover = new Avalonia.Controls.Shapes.Path { Width = 12, Height = 12, StrokeThickness = 1.25, Stroke = Brushes.White, IsVisible = false, Data = PathGeometry.Parse("M1.5,1.5 L10.5,10.5 M10.5,1.5 L1.5,10.5") };
+        var close = new Button
         {
-            Content = "确定",
-            MinWidth = 84,
-            HorizontalAlignment = HorizontalAlignment.Right
+            Width = 42, Height = 38, Padding = new Thickness(0),
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(7),
+            Content = new Panel { Children = { closeGlyph, closeGlyphHover } },
+            VerticalAlignment = VerticalAlignment.Center,
         };
-        ok.Click += (_, _) => dialog.Close();
-        var panel = new StackPanel { Margin = new Avalonia.Thickness(24), Spacing = 20 };
-        panel.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, FontSize = 14 });
-        panel.Children.Add(ok);
-        dialog.Content = panel;
+        close.PointerEntered += (_, _) => { close.Background = new SolidColorBrush(Color.Parse("#D6424E")); closeGlyph.IsVisible = false; closeGlyphHover.IsVisible = true; };
+        close.PointerExited += (_, _) => { close.Background = Brushes.Transparent; closeGlyph.IsVisible = true; closeGlyphHover.IsVisible = false; };
+        close.Click += (_, _) => dialog.Close();
+        var titleGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(16, 0, 5, 0) };
+        titleGrid.Children.Add(titleText);
+        Grid.SetColumn(close, 2); titleGrid.Children.Add(close);
+        titleBar.Child = titleGrid;
+
+        Button NeutralButton(string text)
+        {
+            var button = new Button
+            {
+                Content = text, FontSize = 13, Padding = new Thickness(26, 8),
+                CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1),
+                HorizontalAlignment = HorizontalAlignment.Center, Cursor = new Cursor(StandardCursorType.Hand),
+            };
+            button.Bind(Button.ForegroundProperty, Res("Theme.TextPrimary"));
+            button.Bind(Button.BorderBrushProperty, Res("Theme.BorderStrong"));
+            button.PointerEntered += (_, _) => button.Background = BrushOf("Theme.ButtonHover") ?? Brushes.Transparent;
+            button.PointerExited += (_, _) => button.Background = BrushOf("Theme.ButtonBackground") ?? Brushes.Transparent;
+            button.Background = BrushOf("Theme.ButtonBackground") ?? Brushes.Transparent;
+            return button;
+        }
+
+        var body = new StackPanel { Margin = new Thickness(28, 22, 28, 24), Spacing = 14 };
+        Control content;
+        if (check.State == UpdateState.Available)
+        {
+            var headline = new TextBlock { Text = $"发现新版本 v{check.NewVersion}", FontSize = 19, FontWeight = FontWeight.Bold };
+            headline.Bind(TextBlock.ForegroundProperty, Res("Theme.AccentText"));
+            var versionLine = new TextBlock { Text = $"当前 v{check.CurrentVersion} → 最新 v{check.NewVersion}", FontSize = 12.5 };
+            versionLine.Bind(TextBlock.ForegroundProperty, Res("Theme.TextSecondary"));
+            body.Children.Add(headline);
+            body.Children.Add(versionLine);
+            if (!string.IsNullOrWhiteSpace(check.Notes))
+            {
+                var notes = new TextBlock { Text = check.Notes, FontSize = 12.5, TextWrapping = TextWrapping.Wrap, MaxLines = 3 };
+                notes.Bind(TextBlock.ForegroundProperty, Res("Theme.TextMuted"));
+                body.Children.Add(notes);
+            }
+            var download = new Button
+            {
+                Content = "打开下载页", FontSize = 14, FontWeight = FontWeight.SemiBold,
+                Padding = new Thickness(40, 10), CornerRadius = new CornerRadius(9),
+                Background = new SolidColorBrush(Color.Parse("#16856B")), Foreground = Brushes.White,
+                BorderThickness = new Thickness(0), HorizontalAlignment = HorizontalAlignment.Center,
+                Cursor = new Cursor(StandardCursorType.Hand),
+            };
+            download.PointerEntered += (_, _) => download.Background = new SolidColorBrush(Color.Parse("#0F6B55"));
+            download.PointerExited += (_, _) => download.Background = new SolidColorBrush(Color.Parse("#16856B"));
+            download.Click += (_, _) => OpenExternal("https://miremote.cheems.cn");
+            body.Children.Add(download);
+            if (check.Mirrors.Count > 0)
+            {
+                var mirrorPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14, HorizontalAlignment = HorizontalAlignment.Center };
+                void AddMirror(string label, string url)
+                {
+                    var link = new Button
+                    {
+                        Content = label, FontSize = 12, Padding = new Thickness(0),
+                        Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+                        Cursor = new Cursor(StandardCursorType.Hand),
+                    };
+                    link.Bind(Button.ForegroundProperty, Res("Theme.TextSecondary"));
+                    link.Click += (_, _) => OpenExternal(url);
+                    mirrorPanel.Children.Add(link);
+                }
+                foreach (var (mirror, url) in check.Mirrors)
+                    AddMirror(mirror.Equals("aliyun", StringComparison.OrdinalIgnoreCase) ? "阿里云直链" : $"{mirror.ToUpperInvariant()} 直链", url);
+                var mirrorsLine = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Center };
+                var caption = new TextBlock { Text = "下载太慢？", FontSize = 12 };
+                caption.Bind(TextBlock.ForegroundProperty, Res("Theme.TextMuted"));
+                mirrorsLine.Children.Add(caption);
+                mirrorsLine.Children.Add(mirrorPanel);
+                body.Children.Add(mirrorsLine);
+            }
+            var dismiss = NeutralButton("以后再说");
+            dismiss.Click += (_, _) => dialog.Close();
+            dismiss.Margin = new Thickness(0, 6, 0, 0);
+            body.Children.Add(dismiss);
+            content = body;
+        }
+        else
+        {
+            var glyph = new Border
+            {
+                Width = 44, Height = 44, CornerRadius = new CornerRadius(22),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Child = new Viewbox { Width = 20, Height = 20, Child = new Avalonia.Controls.Shapes.Path { Data = PathGeometry.Parse("M2,6.5 L5,9.5 L10.5,2.5"), StrokeThickness = 2.2, Stroke = Brushes.White, StrokeLineCap = PenLineCap.Round, StrokeJoin = PenLineJoin.Round } },
+            };
+            glyph.Bind(Border.BackgroundProperty, Res("Theme.AccentBorder"));
+            var title = new TextBlock
+            {
+                Text = check.State == UpdateState.Latest ? "已是最新版本" : "检查更新失败",
+                FontSize = 17, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            title.Bind(TextBlock.ForegroundProperty, Res("Theme.TextPrimary"));
+            var detail = new TextBlock
+            {
+                Text = check.State == UpdateState.Latest ? $"当前版本 v{check.CurrentVersion}" : check.Error ?? "网络异常",
+                FontSize = 12.5, TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            detail.Bind(TextBlock.ForegroundProperty, Res("Theme.TextSecondary"));
+            var ok = NeutralButton("知道了");
+            ok.Click += (_, _) => dialog.Close();
+            body.Children.Add(glyph);
+            body.Children.Add(title);
+            body.Children.Add(detail);
+            body.Children.Add(ok);
+            content = body;
+        }
+
+        var contentScroll = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(0) };
+        var bodyHost = new Border { Child = contentScroll };
+        bodyHost.Bind(Border.BackgroundProperty, Res("Theme.FrameBackground"));
+        var separator = new Border { Height = 1 };
+        separator.Bind(Border.BackgroundProperty, Res("Theme.Border"));
+        var rootGrid = new Grid { RowDefinitions = new RowDefinitions("48,Auto,*") };
+        rootGrid.Children.Add(titleBar);
+        Grid.SetRow(separator, 1); rootGrid.Children.Add(separator);
+        Grid.SetRow(bodyHost, 2); rootGrid.Children.Add(bodyHost);
+        var shell = new Border { CornerRadius = new CornerRadius(9), BorderThickness = new Thickness(1), Child = rootGrid };
+        shell.Bind(Border.BackgroundProperty, Res("Theme.FrameBackground"));
+        shell.Bind(Border.BorderBrushProperty, Res("Theme.BorderStrong"));
+        dialog.Content = shell;
         await dialog.ShowDialog(this);
     }
 
