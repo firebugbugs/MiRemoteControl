@@ -57,14 +57,17 @@
       <Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="9"/>
     </Style>
     <Style Selector="Button.icon-link:pointerover"><Setter Property="Background" Value="{DynamicResource About.LinkSurface}"/><Setter Property="BorderBrush" Value="{DynamicResource About.Accent}"/></Style>
-    <!-- Official site banner: deliberately heavier than the icon links. -->
+    <!-- Official site banner: same card language as the rest of the page. -->
     <Style Selector="Button.site-link">
-      <Setter Property="Background" Value="#16856B"/><Setter Property="Foreground" Value="White"/>
+      <Setter Property="Background" Value="{DynamicResource About.Surface}"/>
+      <Setter Property="Foreground" Value="{DynamicResource About.TextPrimary}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource About.Border}"/>
+      <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="CornerRadius" Value="12"/><Setter Property="Padding" Value="16,12"/>
       <Setter Property="Height" Value="58"/><Setter Property="HorizontalAlignment" Value="Stretch"/>
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
     </Style>
-    <Style Selector="Button.site-link:pointerover"><Setter Property="Background" Value="#0F6B55"/></Style>
+    <Style Selector="Button.site-link:pointerover"><Setter Property="Background" Value="{DynamicResource About.LinkSurface}"/><Setter Property="BorderBrush" Value="{DynamicResource About.Accent}"/></Style>
     <Style Selector="Button.close">
       <Setter Property="Width" Value="42"/><Setter Property="Height" Value="38"/><Setter Property="Padding" Value="0"/>
       <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Foreground" Value="{DynamicResource About.TextSecondary}"/>
@@ -111,12 +114,12 @@
 
           <Button Classes="site-link" Tag="https://miremote.cheems.cn" Click="OpenLink" ToolTip.Tip="打开官方网站下载最新版">
             <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-              <Viewbox Width="20" Height="20" VerticalAlignment="Center"><Path Fill="White" Data="M11,4 H13 L13,12.6 L16.3,9.3 L17.7,10.7 L12,16.4 L6.3,10.7 L7.7,9.3 L11,12.6 Z M5,18.5 H19 L19,20.5 H5 Z"/></Viewbox>
+              <Viewbox Width="20" Height="20" VerticalAlignment="Center"><Path Fill="{DynamicResource About.Accent}" Data="M11,4 H13 L13,12.6 L16.3,9.3 L17.7,10.7 L12,16.4 L6.3,10.7 L7.7,9.3 L11,12.6 Z M5,18.5 H19 L19,20.5 H5 Z"/></Viewbox>
               <StackPanel Grid.Column="1" VerticalAlignment="Center">
                 <TextBlock Text="官方网站 · 下载最新版" FontSize="14" FontWeight="SemiBold"/>
-                <TextBlock Text="miremote.cheems.cn" FontSize="11.5" Opacity="0.85"/>
+                <TextBlock Text="miremote.cheems.cn" FontSize="11.5" Foreground="{DynamicResource About.TextSecondary}"/>
               </StackPanel>
-              <Path Grid.Column="2" Width="7" Height="12" Data="M2,1 L7,6 L2,11" Stroke="White" StrokeThickness="1.6" VerticalAlignment="Center"/>
+              <Path Grid.Column="2" Width="7" Height="12" Data="M2,1 L7,6 L2,11" Stroke="{DynamicResource About.Accent}" StrokeThickness="1.6" VerticalAlignment="Center"/>
             </Grid>
           </Button>
 

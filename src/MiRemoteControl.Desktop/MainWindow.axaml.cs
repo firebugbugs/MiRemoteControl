@@ -526,13 +526,14 @@ public partial class MainWindow : Window
         PluginCountText.Text = targets.Count == 0 ? "暂无插件" : $"{targets.Count} 个已加载";
         if (targets.Count == 0)
         {
-            TargetPluginCardsPanel.Children.Add(new TextBlock
+            var empty = new TextBlock
             {
                 Text = "未发现目标插件",
-                Foreground = ThemeBrush("Theme.TextMuted"),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Margin = new Thickness(0, 22)
-            });
+            };
+            empty.Bind(TextBlock.ForegroundProperty, empty.GetResourceObservable("Theme.TextMuted", v => v as IBrush));
+            TargetPluginCardsPanel.Children.Add(empty);
             PowerButton.IsEnabled = false;
             return;
         }
@@ -544,10 +545,12 @@ public partial class MainWindow : Window
             {
                 Text = $"{target.Id} · v{target.Version}",
                 FontSize = 12,
-                Foreground = ThemeBrush("Theme.TextMuted"),
                 Margin = new Thickness(0, 4, 0, 0),
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
+            // Theme brushes must be dynamic: the card snapshot survives theme
+            // switches, so a one-time assignment would freeze the old palette.
+            status.Bind(TextBlock.ForegroundProperty, status.GetResourceObservable("Theme.TextMuted", v => v as IBrush));
             if (selected) _selectedPluginStatus = status;
             var icon = PluginIconView.Create(target.Icon, target.Name);
             var labels = new StackPanel { Margin = new Thickness(2, 0, 12, 0) };
@@ -574,15 +577,18 @@ public partial class MainWindow : Window
             AddTargetActionButton(actionPanel, target, HarnessPluginActions.Status, "读取状态");
             AddTargetActionButton(actionPanel, target, HarnessPluginActions.Stop, "停止任务");
             if (actionPanel.Children.Count > 0) content.Children.Add(actionPanel);
-            TargetPluginCardsPanel.Children.Add(new Border
+            var card = new Border
             {
-                Background = ThemeBrush(selected ? "Theme.SurfaceSelected" : "Theme.Surface"),
-                BorderBrush = ThemeBrush(selected ? "Theme.AccentBorder" : "Theme.Border"),
                 BorderThickness = new Thickness(selected ? 1.2 : 1),
                 CornerRadius = new CornerRadius(11),
                 Padding = new Thickness(16),
                 Child = content
-            });
+            };
+            card.Bind(Border.BackgroundProperty,
+                card.GetResourceObservable(selected ? "Theme.SurfaceSelected" : "Theme.Surface", v => v as IBrush));
+            card.Bind(Border.BorderBrushProperty,
+                card.GetResourceObservable(selected ? "Theme.AccentBorder" : "Theme.Border", v => v as IBrush));
+            TargetPluginCardsPanel.Children.Add(card);
         }
         PowerButton.IsEnabled = SelectedPluginSupportsPower && !_pluginPowerBusy;
         ToolTip.SetTip(PowerButton, $"启动或关闭当前工作插件：{_selectedPluginName}");
@@ -595,9 +601,6 @@ public partial class MainWindow : Window
         button.Click += InvokeTargetAction;
         panel.Children.Add(button);
     }
-
-    private IBrush? ThemeBrush(string key) =>
-        Resources.TryGetResource(key, ActualThemeVariant, out var value) ? value as IBrush : null;
 
     private void ClearTargetPluginPanel()
     {
