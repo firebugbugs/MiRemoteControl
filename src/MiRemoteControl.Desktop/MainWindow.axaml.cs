@@ -556,34 +556,21 @@ public partial class MainWindow : Window
             var labels = new StackPanel { Margin = new Thickness(2, 0, 12, 0) };
             labels.Children.Add(new TextBlock { Text = target.Name, FontSize = 15, FontWeight = FontWeight.SemiBold });
             labels.Children.Add(status);
-            var selector = new RadioButton
-            {
-                GroupName = "WorkingPlugin",
-                Tag = target.Id,
-                IsChecked = selected,
-                Content = "工作插件",
-                Margin = new Thickness(0, 0, 8, 0),
-                VerticalAlignment = VerticalAlignment.Top
-            };
-            selector.Click += SelectPlugin;
-            var header = new Grid { ColumnDefinitions = new ColumnDefinitions("42,*,Auto") };
+            var header = new Grid { ColumnDefinitions = new ColumnDefinitions("42,*") };
             header.Children.Add(icon);
             Grid.SetColumn(labels, 1); header.Children.Add(labels);
-            Grid.SetColumn(selector, 2); header.Children.Add(selector);
-            var content = new StackPanel();
-            content.Children.Add(header);
-            var actionPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(42, 14, 0, 0), Spacing = 8 };
-            AddTargetActionButton(actionPanel, target, HarnessPluginActions.Open, "打开");
-            AddTargetActionButton(actionPanel, target, HarnessPluginActions.Status, "读取状态");
-            AddTargetActionButton(actionPanel, target, HarnessPluginActions.Stop, "停止任务");
-            if (actionPanel.Children.Count > 0) content.Children.Add(actionPanel);
             var card = new Border
             {
+                Tag = target.Id,
                 BorderThickness = new Thickness(selected ? 1.2 : 1),
                 CornerRadius = new CornerRadius(11),
                 Padding = new Thickness(16),
-                Child = content
+                Child = header,
+                Cursor = new Cursor(StandardCursorType.Hand)
             };
+            // The card itself is the selection: click anywhere to make this
+            // plugin the working one.
+            card.PointerPressed += SelectPluginCard;
             card.Bind(Border.BackgroundProperty,
                 card.GetResourceObservable(selected ? "Theme.SurfaceSelected" : "Theme.Surface", v => v as IBrush));
             card.Bind(Border.BorderBrushProperty,
@@ -592,14 +579,6 @@ public partial class MainWindow : Window
         }
         PowerButton.IsEnabled = SelectedPluginSupportsPower && !_pluginPowerBusy;
         ToolTip.SetTip(PowerButton, $"启动或关闭当前工作插件：{_selectedPluginName}");
-    }
-
-    private void AddTargetActionButton(Panel panel, TargetPluginView target, string action, string label)
-    {
-        if (!target.Actions.Contains(action)) return;
-        var button = new Button { Content = label, Tag = new TargetActionRequest(target.Id, action), Classes = { "compact" } };
-        button.Click += InvokeTargetAction;
-        panel.Children.Add(button);
     }
 
     private void ClearTargetPluginPanel()
@@ -812,7 +791,7 @@ public partial class MainWindow : Window
         OpenPath(_pluginDirectory);
     }
 
-    private async void SelectPlugin(object? sender, RoutedEventArgs e)
+    private async void SelectPluginCard(object? sender, PointerPressedEventArgs e)
     {
         if (sender is not Control { Tag: string pluginId }) return;
         try
@@ -827,23 +806,6 @@ public partial class MainWindow : Window
             await LoadState();
             ToolTip.SetTip(PowerButton, $"启动或关闭当前工作插件：{_selectedPluginName}");
             await RefreshSelectedPluginPowerStateAsync(updateStatusText: false);
-        }
-        catch (Exception exception)
-        {
-            SetSelectedPluginStatus(exception.Message);
-        }
-    }
-
-    private async void InvokeTargetAction(object? sender, RoutedEventArgs e)
-    {
-        if (sender is not Control { Tag: TargetActionRequest request }) return;
-        SetSelectedPluginStatus("正在执行…");
-        try
-        {
-            if (request.Action == HarnessPluginActions.Open) await _client.AllowForegroundAsync();
-            var result = await _client.InvokeAsync(request.PluginId, request.Action);
-            SetSelectedPluginStatus(result.Message);
-            if (result.Success && request.Action == HarnessPluginActions.Open) FlashPowerButton();
         }
         catch (Exception exception)
         {
@@ -1829,7 +1791,6 @@ public partial class MainWindow : Window
     }
 
     private sealed record TargetPluginView(string Id, string Name, string Version, HashSet<string> Actions, IImage? Icon = null);
-    private sealed record TargetActionRequest(string PluginId, string Action);
 
     private void MinimizeWindow(object? sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
