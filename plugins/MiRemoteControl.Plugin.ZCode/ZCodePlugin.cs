@@ -23,7 +23,7 @@ public sealed class ZCodePlugin : IHarnessPlugin, IAsyncHarnessPlugin
     private CancellationTokenSource? _inputWatcherCancellation;
     private Task? _inputWatcherTask;
     private TaskCompletionSource<long> _inputChanged = NewInputChangedSignal();
-    public PluginDescriptor Descriptor { get; } = new("mrc.zcode", "ZCode 控制", "0.4.0",
+    public PluginDescriptor Descriptor { get; } = new("mrc.zcode", "ZCode 控制", "0.0.1",
         HarnessPluginActions.DefaultActions, PluginKinds.Target);
 
     public async Task<CommandResult> ExecuteAsync(

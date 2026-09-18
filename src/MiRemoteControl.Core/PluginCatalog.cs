@@ -11,8 +11,10 @@ public sealed class PluginCatalog : IDisposable
 {
     private const int MaxBundleEntries = 2048;
     private const long MaxBundleBytes = 256L * 1024 * 1024;
+    private const int MaxIconBytes = 2 * 1024 * 1024;
     private readonly Dictionary<string, LoadedPlugin> _plugins = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _sourcePaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, byte[]> _icons = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<AssemblyLoadContext> _contexts = [];
     private readonly string _cacheDirectory;
 
@@ -104,6 +106,9 @@ public sealed class PluginCatalog : IDisposable
         var manifest = JsonSerializer.Deserialize<Manifest>(manifestJson, Wire.Json)
             ?? throw new InvalidDataException("Empty manifest.");
         if (manifest.ApiVersion != 2) throw new InvalidDataException("插件契约已分离，需要 apiVersion=2 的插件，请重新构建旧插件。");
+        // The package icon is validated before the entry assembly loads so a
+        // broken icon fails fast instead of after the plugin has started.
+        var icon = ReadIcon(manifest, root, expectedKind);
         var entry = Path.GetFullPath(Path.Combine(root, manifest.EntryAssembly));
         if (!entry.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Entry must be inside the plugin package.");
@@ -141,7 +146,38 @@ public sealed class PluginCatalog : IDisposable
         }
         _plugins.Add(manifest.Id, plugin);
         _sourcePaths.Add(manifest.Id, Path.GetFullPath(sourcePath));
+        if (icon is not null) _icons.Add(manifest.Id, icon);
     }
+
+    /// <summary>
+    /// Reads the declared package icon. Target plugins must ship one — it is
+    /// what the studio's plugin surfaces display; remote plugins may omit it.
+    /// </summary>
+    private static byte[]? ReadIcon(Manifest manifest, string root, string expectedKind)
+    {
+        if (string.IsNullOrWhiteSpace(manifest.Icon))
+        {
+            if (expectedKind == PluginKinds.Target)
+                throw new InvalidDataException("Harness 插件必须在 plugin.json 中声明 icon（包内 PNG 图标）。");
+            return null;
+        }
+
+        var iconPath = Path.GetFullPath(Path.Combine(root, manifest.Icon));
+        if (!iconPath.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Icon must be inside the plugin package.");
+        if (!File.Exists(iconPath)) throw new InvalidDataException($"插件图标文件不存在：{manifest.Icon}");
+        var icon = File.ReadAllBytes(iconPath);
+        if (icon.Length > MaxIconBytes)
+            throw new InvalidDataException($"插件图标不能超过 {MaxIconBytes / 1024} KB。");
+        // PNG magic: a wrong format (ico/jpg) would otherwise only fail later
+        // and far away, inside the UI's decoder.
+        if (icon.Length < 8 || icon[0] != 0x89 || icon[1] != 0x50 || icon[2] != 0x4E || icon[3] != 0x47)
+            throw new InvalidDataException($"插件图标必须是 PNG 文件：{manifest.Icon}");
+        return icon;
+    }
+
+    public byte[]? GetIcon(string pluginId) =>
+        _icons.TryGetValue(pluginId, out var icon) ? icon : null;
 
     private static string FolderForKind(string kind) =>
         string.Equals(kind, PluginKinds.Remote, StringComparison.OrdinalIgnoreCase)
@@ -207,6 +243,7 @@ public sealed class PluginCatalog : IDisposable
         }
         _plugins.Clear();
         _sourcePaths.Clear();
+        _icons.Clear();
     }
 
     // Internal dispatch adapter only; it is deliberately not a public plugin
@@ -252,7 +289,15 @@ public sealed class PluginCatalog : IDisposable
         public void Dispose() => ((IDisposable)_instance).Dispose();
     }
 
-    private sealed record Manifest(string Id, string Name, string Version, string Kind, int ApiVersion, string EntryAssembly, string EntryType);
+    private sealed record Manifest(
+        string Id,
+        string Name,
+        string Version,
+        string Kind,
+        int ApiVersion,
+        string EntryAssembly,
+        string EntryType,
+        string? Icon = null);
 
     private sealed class PluginLoadContext(string entry) : AssemblyLoadContext
     {

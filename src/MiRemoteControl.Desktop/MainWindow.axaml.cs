@@ -32,10 +32,18 @@ public partial class MainWindow : Window
     private bool _loading;
     private string _pluginDirectory = Path.Combine(AppContext.BaseDirectory, "plugins");
     private string _targetPluginDirectory = Path.Combine(AppContext.BaseDirectory, "plugins", "targets");
+    private string _remotePluginDirectory = Path.Combine(AppContext.BaseDirectory, "plugins", "remotes");
     private string _selectedPluginId = "";
     private string _selectedPluginName = "目标插件";
+    private string _selectedRemotePluginId = "";
     private readonly HashSet<string> _loadedTargetPluginIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _selectedTargetActions = new(StringComparer.OrdinalIgnoreCase);
+    // Package icons are keyed by host process id + plugin id: a host restart
+    // rescans packages, so its icons must not leak into the new session.
+    private readonly Dictionary<string, IImage> _pluginIconImages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _pluginIconFetching = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _pluginIconUnavailable = new(StringComparer.OrdinalIgnoreCase);
+    private string _hostProcessKey = "";
     private TextBlock? _selectedPluginStatus;
     private string _targetPluginsSignature = "";
     private bool _pluginPowerBusy;
@@ -414,10 +422,29 @@ public partial class MainWindow : Window
         {
             _pluginDirectory = path;
             _targetPluginDirectory = Path.Combine(path, "targets");
+            _remotePluginDirectory = Path.Combine(path, "remotes");
         }
         if (state.TryGetProperty("targetPluginDirectory", out var targetDirectory) &&
             targetDirectory.GetString() is { Length: > 0 } targetPath)
             _targetPluginDirectory = targetPath;
+        if (state.TryGetProperty("remotePluginDirectory", out var remoteDirectory) &&
+            remoteDirectory.GetString() is { Length: > 0 } remotePath)
+            _remotePluginDirectory = remotePath;
+        if (state.TryGetProperty("selectedRemotePlugin", out var selectedRemote) &&
+            selectedRemote.GetString() is { Length: > 0 } selectedRemoteId)
+            _selectedRemotePluginId = selectedRemoteId;
+
+        if (state.TryGetProperty("processId", out var processIdValue) &&
+            processIdValue.ValueKind == JsonValueKind.Number &&
+            processIdValue.TryGetInt32(out var processId))
+        {
+            var hostKey = processId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (hostKey != _hostProcessKey)
+            {
+                _hostProcessKey = hostKey;
+                _pluginIconUnavailable.Clear();
+            }
+        }
 
         var targets = new List<TargetPluginView>();
         _loadedTargetPluginIds.Clear();
@@ -440,7 +467,11 @@ public partial class MainWindow : Window
                         .Select(id => id!)
                         .ToHashSet(StringComparer.OrdinalIgnoreCase)
                     : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                targets.Add(new TargetPluginView(pluginId, name, version, actions));
+                var iconKey = _hostProcessKey + ":" + pluginId;
+                _pluginIconImages.TryGetValue(iconKey, out var icon);
+                if (icon is null && !_pluginIconUnavailable.Contains(iconKey) && _pluginIconFetching.Add(iconKey))
+                    _ = FetchPluginIconAsync(iconKey, pluginId);
+                targets.Add(new TargetPluginView(pluginId, name, version, actions, icon));
                 if (string.Equals(pluginId, _selectedPluginId, StringComparison.OrdinalIgnoreCase))
                 {
                     _selectedPluginName = name;
@@ -451,10 +482,43 @@ public partial class MainWindow : Window
         RenderTargetPluginCards(targets);
     }
 
+    private async Task FetchPluginIconAsync(string cacheKey, string pluginId)
+    {
+        try
+        {
+            var result = await _client.InvokeAsync("core", "plugin.icon", new() { ["plugin"] = pluginId }, timeoutMs: 3000);
+            if (result.Success &&
+                result.Data is JsonElement { ValueKind: JsonValueKind.Object } data &&
+                data.TryGetProperty("icon", out var iconValue) &&
+                iconValue.ValueKind == JsonValueKind.String)
+            {
+                if (PluginIconView.Decode(Convert.FromBase64String(iconValue.GetString() ?? "")) is { } image)
+                {
+                    _pluginIconImages[cacheKey] = image;
+                    // The next status poll re-renders the cards with the icon.
+                    _targetPluginsSignature = "";
+                    return;
+                }
+            }
+            // A definitive "no icon" answer stops retrying; transport failures
+            // (host down, timeout) stay retryable on a later poll.
+            if (result.Success || result.Code is "PluginNotFound" or "PluginIconMissing")
+                _pluginIconUnavailable.Add(cacheKey);
+        }
+        catch
+        {
+            // Transport failure — keep the key retryable.
+        }
+        finally
+        {
+            _pluginIconFetching.Remove(cacheKey);
+        }
+    }
+
     private void RenderTargetPluginCards(IReadOnlyList<TargetPluginView> targets)
     {
         var signature = _selectedPluginId + "|" + string.Join('|', targets.Select(target =>
-            $"{target.Id}:{target.Name}:{target.Version}:{string.Join(',', target.Actions.Order())}"));
+            $"{target.Id}:{target.Name}:{target.Version}:{target.Icon is not null}:{string.Join(',', target.Actions.Order())}"));
         if (signature == _targetPluginsSignature) return;
         _targetPluginsSignature = signature;
         _selectedPluginStatus = null;
@@ -485,22 +549,7 @@ public partial class MainWindow : Window
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
             if (selected) _selectedPluginStatus = status;
-            var icon = new Border
-            {
-                Width = 34,
-                Height = 34,
-                CornerRadius = new CornerRadius(9),
-                Background = new SolidColorBrush(Color.Parse("#5A4BCB")),
-                Child = new TextBlock
-                {
-                    Text = target.Name.Trim().FirstOrDefault().ToString().ToUpperInvariant(),
-                    FontSize = 17,
-                    FontWeight = FontWeight.Bold,
-                    Foreground = Brushes.White,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                }
-            };
+            var icon = PluginIconView.Create(target.Icon, target.Name);
             var labels = new StackPanel { Margin = new Thickness(2, 0, 12, 0) };
             labels.Children.Add(new TextBlock { Text = target.Name, FontSize = 15, FontWeight = FontWeight.SemiBold });
             labels.Children.Add(status);
@@ -668,6 +717,20 @@ public partial class MainWindow : Window
     private async void OpenPluginManager(object? sender, RoutedEventArgs e)
     {
         var manager = new PluginManagerWindow(_targetPluginDirectory);
+        await manager.ShowDialog(this);
+        await LoadState();
+    }
+
+    private async void OpenRemotePluginManager(object? sender, RoutedEventArgs e)
+    {
+        var manager = new RemotePluginManagerWindow(
+            _remotePluginDirectory,
+            _selectedRemotePluginId,
+            async pluginId =>
+            {
+                var result = await _client.InvokeAsync("core", "remote.driver.select", new() { ["plugin"] = pluginId }, timeoutMs: 3000);
+                return (result.Success, result.Message);
+            });
         await manager.ShowDialog(this);
         await LoadState();
     }
@@ -1747,7 +1810,7 @@ public partial class MainWindow : Window
             Process.Start("xdg-open", path);
     }
 
-    private sealed record TargetPluginView(string Id, string Name, string Version, HashSet<string> Actions);
+    private sealed record TargetPluginView(string Id, string Name, string Version, HashSet<string> Actions, IImage? Icon = null);
     private sealed record TargetActionRequest(string PluginId, string Action);
 
     private void MinimizeWindow(object? sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;

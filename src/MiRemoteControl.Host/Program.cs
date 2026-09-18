@@ -138,6 +138,7 @@ static async Task RunAsync(Process owner)
         {
             "status" => await CoreStatusAsync(ct),
             "plugins" => CommandResult.Ok("已加载插件", PluginSummary()),
+            "plugin.icon" => PluginIcon(arguments),
             "remote.select" => SelectTargetPlugin(arguments),
             "remote.driver.select" => SelectRemotePlugin(arguments),
             "remote.status" => await ExecuteRemoteAsync("status", arguments, ct),
@@ -205,6 +206,23 @@ static async Task RunAsync(Process owner)
         pluginSources = catalog.SourcePaths.Select(item => new { id = item.Key, path = item.Value }),
         errors = catalog.Errors
     };
+
+    // Icons are served on demand instead of inside the frequent status
+    // payload: each package icon is a few KB of base64 that never changes
+    // between host restarts, and the UI caches it per host process.
+    CommandResult PluginIcon(Dictionary<string, string>? arguments)
+    {
+        if (!TryReadSinglePluginArgument(arguments, out var pluginId))
+            return CommandResult.Fail("InvalidArgument", "plugin.icon 需要且只接受 plugin 参数。");
+        var descriptor = catalog.Descriptors.FirstOrDefault(plugin =>
+            string.Equals(plugin.Id, pluginId, StringComparison.OrdinalIgnoreCase));
+        if (descriptor is null)
+            return CommandResult.Fail("PluginNotFound", $"未找到插件：{pluginId}");
+        var icon = catalog.GetIcon(descriptor.Id);
+        return icon is null
+            ? CommandResult.Fail("PluginIconMissing", $"插件 {descriptor.Name} 没有图标。")
+            : CommandResult.Ok($"插件 {descriptor.Name} 的图标", new { icon = Convert.ToBase64String(icon) });
+    }
 
     CommandResult SelectTargetPlugin(Dictionary<string, string>? arguments)
     {

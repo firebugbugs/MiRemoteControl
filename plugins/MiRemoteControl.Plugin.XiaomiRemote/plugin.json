@@ -1,9 +1,10 @@
 {
   "id": "mrc.remote.xiaomi",
   "name": "小米蓝牙遥控器",
-  "version": "1.1.0",
+  "version": "0.0.1",
   "kind": "remote",
   "apiVersion": 2,
+  "icon": "icon.png",
   "entryAssembly": "MiRemoteControl.Plugin.XiaomiRemote.dll",
   "entryType": "MiRemoteControl.Plugin.XiaomiRemote.XiaomiRemotePlugin"
 }

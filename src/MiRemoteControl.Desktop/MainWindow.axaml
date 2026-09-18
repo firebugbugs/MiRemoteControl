@@ -208,10 +208,10 @@
               CornerRadius="9,9,0,0" PointerPressed="TitleBarPointerPressed">
         <Grid ColumnDefinitions="*,Auto">
           <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
-            <Border Classes="title-logo" Width="27" Height="27" Background="Transparent" ToolTip.Tip="Mi Remote Studio">
+            <Border Classes="title-logo" Width="27" Height="27" Background="Transparent" ToolTip.Tip="Cheems遥控器">
               <Image Classes="title-logo-image" Source="/Assets/head_portrait.png" Width="27" Height="27"/>
             </Border>
-            <TextBlock Text="Mi Remote Studio" Margin="10,0,0,0" VerticalAlignment="Center" FontSize="13.5" FontWeight="SemiBold"/>
+            <TextBlock Text="Cheems遥控器" Margin="10,0,0,0" VerticalAlignment="Center" FontSize="13.5" FontWeight="SemiBold"/>
             <Border Width="1" Height="14" Background="{DynamicResource Theme.BorderStrong}" Margin="12,0"/>
             <TextBlock Text="蓝牙遥控器控制台" VerticalAlignment="Center" Foreground="{DynamicResource Theme.TextSecondary}" FontSize="12"/>
           </StackPanel>
@@ -224,8 +224,9 @@
       </Border>
 
       <Grid Grid.Row="1" Margin="30,22,30,30" RowDefinitions="Auto,*">
-        <Grid Margin="2,0,2,22">
-          <StackPanel><TextBlock Text="Mi Remote Studio" FontSize="30" FontWeight="SemiBold"/><TextBlock Text="小米蓝牙遥控器 · 实时输入与语音" Margin="0,5,0,0" Foreground="{DynamicResource Theme.TextSecondary}"/></StackPanel>
+        <Grid Margin="2,0,2,22" ColumnDefinitions="*,Auto">
+          <StackPanel><TextBlock Text="Cheems遥控器" FontSize="30" FontWeight="SemiBold"/><TextBlock Text="小米蓝牙遥控器 · 实时输入与语音" Margin="0,5,0,0" Foreground="{DynamicResource Theme.TextSecondary}"/></StackPanel>
+          <Button Grid.Column="1" Classes="compact" Content="遥控器插件" Click="OpenRemotePluginManager" VerticalAlignment="Bottom" ToolTip.Tip="管理并选择遥控器插件"/>
         </Grid>
 
         <Grid Grid.Row="1" ColumnDefinitions="330,26,*">
@@ -369,12 +370,12 @@
                                   VerticalAlignment="Center" Click="StartWithWindowsChanged" AutomationProperties.Name="随系统启动"/>
                   </Grid>
                 </Border>
-                <Button Grid.Row="4" Classes="settings-menu-item" HorizontalAlignment="Stretch" Tag="about" Click="AboutMenuClick" AutomationProperties.Name="关于 Mi Remote Studio">
+                <Button Grid.Row="4" Classes="settings-menu-item" HorizontalAlignment="Stretch" Tag="about" Click="AboutMenuClick" AutomationProperties.Name="关于 Cheems遥控器">
                   <Grid ColumnDefinitions="28,*,Auto">
                     <Border Width="20" Height="20" CornerRadius="10" Background="{DynamicResource Theme.AccentSurface}" VerticalAlignment="Center">
                       <TextBlock Text="i" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource Theme.AccentText}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
-                    <TextBlock Grid.Column="1" Text="关于 Mi Remote Studio" FontSize="13.5" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="1" Text="关于 Cheems遥控器" FontSize="13.5" VerticalAlignment="Center"/>
                     <Path Grid.Column="2" Width="7" Height="12" Data="M2,1 L7,6 L2,11" Stroke="{DynamicResource Theme.TextMuted}" StrokeThickness="1.4" VerticalAlignment="Center"/>
                   </Grid>
                 </Button>

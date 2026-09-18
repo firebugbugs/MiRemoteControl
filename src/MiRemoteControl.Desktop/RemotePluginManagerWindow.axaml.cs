@@ -11,31 +11,42 @@ using MiRemoteControl.Desktop.Infrastructure;
 
 namespace MiRemoteControl.Desktop;
 
-public partial class PluginManagerWindow : Window
+/// <summary>
+/// Remote-plugin counterpart of <see cref="PluginManagerWindow"/>. The one
+/// behavioral difference: selecting the active remote plugin happens here
+/// (live, via core remote.driver.select) instead of on the main window.
+/// </summary>
+public partial class RemotePluginManagerWindow : Window
 {
     private static readonly MarketplaceSource[] Marketplace =
     [
-        new("mrc.zcode", new Uri("https://download.cheems.cn/v1/manifests/plugins/mrc.zcode/stable.json")),
-        new("mrc.chatgpt", new Uri("https://download.cheems.cn/v1/manifests/plugins/mrc.chatgpt/stable.json")),
-        new("mrc.reasonix", new Uri("https://download.cheems.cn/v1/manifests/plugins/mrc.reasonix/stable.json"))
+        new("mrc.remote.xiaomi", new Uri("https://download.cheems.cn/v1/manifests/plugins/mrc.remote.xiaomi/stable.json"))
     ];
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
 
-    private readonly string _targetPluginDirectory;
+    private readonly string _remotePluginDirectory;
+    private readonly Func<string, Task<(bool Success, string Message)>> _selectDriver;
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, RemotePlugin> _remotePlugins = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CloudBinding> _cloudBindings = new(StringComparer.OrdinalIgnoreCase);
     private string _installedSignature = "";
+    private string _activePluginId;
 
-    public PluginManagerWindow() : this(Path.Combine(AppContext.BaseDirectory, "plugins", "targets"))
+    public RemotePluginManagerWindow() : this(
+        Path.Combine(AppContext.BaseDirectory, "plugins", "remotes"), null, _ => Task.FromResult((false, "占位构造不可用。")))
     {
     }
 
-    public PluginManagerWindow(string targetPluginDirectory)
+    public RemotePluginManagerWindow(
+        string remotePluginDirectory,
+        string? activePluginId,
+        Func<string, Task<(bool Success, string Message)>> selectDriver)
     {
-        _targetPluginDirectory = Path.GetFullPath(targetPluginDirectory);
+        _remotePluginDirectory = Path.GetFullPath(remotePluginDirectory);
+        _activePluginId = activePluginId ?? "";
+        _selectDriver = selectDriver;
         InitializeComponent();
-        Directory.CreateDirectory(_targetPluginDirectory);
+        Directory.CreateDirectory(_remotePluginDirectory);
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _timer.Tick += (_, _) => RefreshUi();
@@ -118,28 +129,57 @@ public partial class PluginManagerWindow : Window
     {
         var installedPlugins = FindInstalledPlugins();
         var signature = string.Join('|', installedPlugins.Select(installed =>
-            $"{installed.Path}:{installed.Id}:{installed.Version}:{File.GetLastWriteTimeUtc(installed.Path).Ticks}"));
+            $"{installed.Path}:{installed.Id}:{installed.Version}:{File.GetLastWriteTimeUtc(installed.Path).Ticks}")) + "|" + _activePluginId;
         if (!force && string.Equals(signature, _installedSignature, StringComparison.Ordinal)) return;
         _installedSignature = signature;
         LocalPluginsPanel.Children.Clear();
 
         if (installedPlugins.Count == 0)
         {
-            LocalPluginsPanel.Children.Add(new TextBlock { Text = "未安装目标端插件", Foreground = Brush("Plugin.Muted") });
+            LocalPluginsPanel.Children.Add(new TextBlock { Text = "未安装遥控器插件", Foreground = Brush("Plugin.Muted") });
             return;
         }
 
         foreach (var installed in installedPlugins)
         {
-            var remove = ActionButton();
+            var use = ActionButton();
+            var active = installed.Id.Equals(_activePluginId, StringComparison.OrdinalIgnoreCase);
+            use.Content = active ? "使用中" : "使用";
+            use.IsEnabled = !active;
+            use.Click += async (_, _) =>
+            {
+                use.IsEnabled = false;
+                use.Content = "切换中…";
+                var (success, message) = await _selectDriver(installed.Id);
+                if (success)
+                {
+                    _activePluginId = installed.Id;
+                }
+                else
+                {
+                    use.IsEnabled = true;
+                    use.Content = "使用";
+                    await ShowNoticeAsync("切换失败", message);
+                }
+                _installedSignature = "";
+                RefreshLocalPlugins(force: true);
+                if (_cloudBindings.TryGetValue(installed.Id, out var binding)) RefreshCloudBinding(binding);
+            };
+
+            var remove = ActionButton(8);
             remove.Content = "卸载";
+            // The hosted remote plugin holds open handles into its extracted
+            // cache; removing the package of the running driver would leave
+            // the session without a remote until restart.
+            remove.IsEnabled = !active;
+            if (active) ToolTip.SetTip(remove, "使用中的遥控器插件不能卸载");
             remove.Click += async (_, _) =>
             {
-                if (!await ConfirmAsync("卸载插件", $"确定卸载 {installed.Name}？\n当前已经加载的版本会在软件重启后移除。", "确认卸载")) return;
+                if (!await ConfirmAsync("卸载插件", $"确定卸载 {installed.Name}？\n软件重启后该插件不再加载。", "确认卸载")) return;
                 try
                 {
                     var full = Path.GetFullPath(installed.Path);
-                    if (!string.Equals(Directory.GetParent(full)?.FullName, _targetPluginDirectory, StringComparison.OrdinalIgnoreCase))
+                    if (!string.Equals(Directory.GetParent(full)?.FullName, _remotePluginDirectory, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException("插件路径不安全。");
                     File.Delete(full);
                     if (_remotePlugins.TryGetValue(installed.Id, out var remote))
@@ -154,12 +194,14 @@ public partial class PluginManagerWindow : Window
                 }
             };
 
-            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("42,*,Auto") };
+            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("42,*,Auto,Auto") };
             grid.Children.Add(PluginIcon(installed.IconPng, installed.Name));
-            var text = PluginText(installed.Name, $"{installed.Id} · v{installed.Version}");
+            var text = PluginText(installed.Name, $"{installed.Id} · v{installed.Version}{(active ? " · 当前使用" : "")}");
             Grid.SetColumn(text, 1);
             grid.Children.Add(text);
-            Grid.SetColumn(remove, 2);
+            Grid.SetColumn(use, 2);
+            grid.Children.Add(use);
+            Grid.SetColumn(remove, 3);
             grid.Children.Add(remove);
             var card = Card();
             card.Child = grid;
@@ -228,7 +270,7 @@ public partial class PluginManagerWindow : Window
     private DownloadDescriptor CreateDescriptor(RemotePlugin remote)
     {
         return new DownloadDescriptor(
-            "plugins",
+            "remote-plugins",
             remote.Id,
             remote.Version,
             remote.Name,
@@ -249,8 +291,8 @@ public partial class PluginManagerWindow : Window
 
                 ValidatePluginPackage(package, remote.Id, remote.Version);
                 cancellationToken.ThrowIfCancellationRequested();
-                Directory.CreateDirectory(_targetPluginDirectory);
-                var target = Path.Combine(_targetPluginDirectory, remote.Id + ".mrcplugin");
+                Directory.CreateDirectory(_remotePluginDirectory);
+                var target = Path.Combine(_remotePluginDirectory, remote.Id + ".mrcplugin");
                 var staging = target + ".new";
                 try
                 {
@@ -295,7 +337,11 @@ public partial class PluginManagerWindow : Window
             binding.Pause.IsVisible = false;
             binding.Cancel.IsVisible = false;
             binding.Progress.IsVisible = false;
-            binding.Status.Text = installed is null ? "尚未安装，可下载后使用。" : updateAvailable ? $"已安装 v{installed.Version}，可更新到 v{binding.Remote.Version}。" : "本地已是最新版本。";
+            binding.Status.Text = installed is null
+                ? "尚未安装，可下载后使用。"
+                : updateAvailable
+                    ? $"已安装 v{installed.Version}，可更新到 v{binding.Remote.Version}，安装后重启软件生效。"
+                    : "本地已是最新版本。";
             return;
         }
 
@@ -318,7 +364,7 @@ public partial class PluginManagerWindow : Window
             binding.Pause.IsVisible = false;
             binding.Cancel.IsVisible = false;
             binding.Progress.IsVisible = false;
-            binding.Status.Text = $"v{installed.Version} 已安装，重启软件后生效。";
+            binding.Status.Text = $"v{installed.Version} 已安装，重启软件后在本地列表中选择使用。";
             return;
         }
 
@@ -360,8 +406,8 @@ public partial class PluginManagerWindow : Window
         var plugins = new List<InstalledPlugin>();
         try
         {
-            if (!Directory.Exists(_targetPluginDirectory)) return plugins;
-            foreach (var file in Directory.EnumerateFiles(_targetPluginDirectory, "*", SearchOption.TopDirectoryOnly))
+            if (!Directory.Exists(_remotePluginDirectory)) return plugins;
+            foreach (var file in Directory.EnumerateFiles(_remotePluginDirectory, "*", SearchOption.TopDirectoryOnly))
                 if (TryReadPlugin(file, out var plugin)) plugins.Add(plugin!);
         }
         catch { }

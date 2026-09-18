@@ -6,6 +6,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/MiRemoteControl.Contracts/MiRemoteControl.Contracts.csproj" />
     <None Update="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="icon.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />

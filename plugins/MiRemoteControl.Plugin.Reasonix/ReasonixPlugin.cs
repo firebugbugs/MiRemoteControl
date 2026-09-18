@@ -119,7 +119,7 @@ public sealed class ReasonixPlugin : IHarnessPlugin, IAsyncHarnessPlugin
     private Task? _inputWatcherTask;
     private TaskCompletionSource<long> _inputChanged = NewInputChangedSignal();
 
-    public PluginDescriptor Descriptor { get; } = new("mrc.reasonix", "ReasoniX 控制", "0.1.0",
+    public PluginDescriptor Descriptor { get; } = new("mrc.reasonix", "ReasoniX 控制", "0.0.1",
         HarnessPluginActions.DefaultActions, PluginKinds.Target);
 
     public async Task<CommandResult> ExecuteAsync(

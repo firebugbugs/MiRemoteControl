@@ -3,11 +3,15 @@
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>WinExe</OutputType>
     <AssemblyName>MiRemoteControl</AssemblyName>
-    <Version>1.0.0</Version>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+    <Version>0.0.1</Version>
+    <AssemblyVersion>0.0.1.0</AssemblyVersion>
+    <FileVersion>0.0.1.0</FileVersion>
     <ApplicationIcon>Assets\head_portrait.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <!-- Plugin projects stage plugin.json/icon.png via ProjectReference; publish
+         only needs their zipped bundles from StageDesktopWindowsRuntime, so the
+         colliding loose copies must not fail self-contained publish. -->
+    <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
   </PropertyGroup>
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />

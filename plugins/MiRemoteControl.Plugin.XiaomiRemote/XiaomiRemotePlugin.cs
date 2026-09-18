@@ -26,7 +26,7 @@ public sealed class XiaomiRemotePlugin : IRemotePlugin, IAsyncRemotePlugin, IHos
     public PluginDescriptor Descriptor { get; } = new(
         "mrc.remote.xiaomi",
         "小米蓝牙遥控器",
-        "1.1.0",
+        "0.0.1",
         [
             new("status", "状态", "读取遥控器、语音与模型状态"),
             new("buttons", "按键列表", "列出可模拟的遥控器按键"),

@@ -1,9 +1,10 @@
 {
   "id": "mrc.chatgpt",
   "name": "ChatGPT 控制",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "kind": "target",
   "apiVersion": 2,
+  "icon": "icon.png",
   "entryAssembly": "MiRemoteControl.Plugin.ChatGpt.dll",
   "entryType": "MiRemoteControl.Plugin.ChatGpt.ChatGptPlugin"
 }

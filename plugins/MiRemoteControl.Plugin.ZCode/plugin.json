@@ -1,9 +1,10 @@
 {
   "id": "mrc.zcode",
   "name": "ZCode 控制",
-  "version": "0.4.0",
+  "version": "0.0.1",
   "kind": "target",
   "apiVersion": 2,
+  "icon": "icon.png",
   "entryAssembly": "MiRemoteControl.Plugin.ZCode.dll",
   "entryType": "MiRemoteControl.Plugin.ZCode.ZCodePlugin"
 }

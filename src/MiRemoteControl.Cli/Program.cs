@@ -113,7 +113,7 @@ try
             if (options.ContainsKey("text")) throw new ArgumentException("--text 与 --file 不能同时使用。");
             options["text"] = await File.ReadAllTextAsync(file, Encoding.UTF8);
         }
-        if (plugin == "core" && action is not ("remote.press" or "remote.select" or "remote.driver.select" or "voice.model.select") && options.Count != 0)
+        if (plugin == "core" && action is not ("remote.press" or "remote.select" or "remote.driver.select" or "voice.model.select" or "plugin.icon") && options.Count != 0)
             throw new ArgumentException("该核心命令不接受额外参数。");
         if (plugin != "core" || action == "remote.press") await client.AllowForegroundAsync();
         result = await client.InvokeAsync(plugin, action, options, timeoutMs: plugin == "core" && action == "voice.model.select" ? 300000 : 20000);

@@ -7,5 +7,6 @@
     <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
     <ProjectReference Include="../../src/MiRemoteControl.Contracts/MiRemoteControl.Contracts.csproj" />
     <None Update="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="icon.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

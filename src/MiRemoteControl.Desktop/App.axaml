@@ -9,15 +9,15 @@
   <TrayIcon.Icons>
     <TrayIcons>
       <TrayIcon Icon="/Assets/head_portrait.ico"
-                ToolTipText="Mi Remote Studio · 小米蓝牙遥控器"
+                ToolTipText="Cheems遥控器 · 小米蓝牙遥控器"
                 Clicked="TrayIconClicked">
         <TrayIcon.Menu>
           <NativeMenu>
-            <NativeMenuItem Header="打开 Mi Remote Studio" Icon="/Assets/head_portrait.png"
+            <NativeMenuItem Header="打开 Cheems遥控器" Icon="/Assets/head_portrait.png"
                             Gesture="Ctrl+Shift+M" ToolTip="显示并聚焦主窗口"
                             Click="ShowMainWindowMenuClicked"/>
             <NativeMenuItemSeparator/>
-            <NativeMenuItem Header="退出 Mi Remote Studio" Gesture="Alt+F4" ToolTip="关闭后台服务并退出程序"
+            <NativeMenuItem Header="退出 Cheems遥控器" Gesture="Alt+F4" ToolTip="关闭后台服务并退出程序"
                             Click="ExitMenuClicked"/>
           </NativeMenu>
         </TrayIcon.Menu>
