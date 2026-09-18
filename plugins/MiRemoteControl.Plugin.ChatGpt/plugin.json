@@ -1,7 +1,7 @@
 {
   "id": "mrc.chatgpt",
   "name": "ChatGPT 控制",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "kind": "target",
   "apiVersion": 2,
   "icon": "icon.png",

@@ -108,7 +108,7 @@ public sealed class ChatGptPlugin : IHarnessPlugin, IAsyncHarnessPlugin
     private Task? _inputWatcherTask;
     private TaskCompletionSource<long> _inputChanged = NewInputChangedSignal();
 
-    public PluginDescriptor Descriptor { get; } = new("mrc.chatgpt", "ChatGPT 控制", "0.0.1",
+    public PluginDescriptor Descriptor { get; } = new("mrc.chatgpt", "ChatGPT 控制", "0.0.2",
         HarnessPluginActions.DefaultActions, PluginKinds.Target);
 
     public async Task<CommandResult> ExecuteAsync(
